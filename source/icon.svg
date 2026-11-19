@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="sky" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#223F59"/>
+      <stop offset="56%" stop-color="#10263C"/>
+      <stop offset="100%" stop-color="#0C172C"/>
+    </linearGradient>
+    <linearGradient id="wake" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#306C81"/>
+      <stop offset="60%" stop-color="#52C6AF"/>
+      <stop offset="100%" stop-color="#387C94"/>
+    </linearGradient>
+    <linearGradient id="aurora" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#5ED9C7"/>
+      <stop offset="44%" stop-color="#A4F8D8"/>
+      <stop offset="75%" stop-color="#E2FFDA"/>
+      <stop offset="100%" stop-color="#78DBC0"/>
+    </linearGradient>
+  </defs>
+  <rect x="6" y="6" width="244" height="244" rx="50" fill="url(#sky)"/>
+  <path fill="url(#wake)" d="M 25 163 C 40 125 72 95 112 87 C 149 79 186 82 218 39 C 208 76 189 100 159 112 C 122 127 86 114 50 139 C 40 146 32 154 25 163 Z"/>
+  <path fill="url(#aurora)" d="M 25 163 C 47 114 75 93 113 82 C 153 70 189 77 218 39 C 203 74 180 89 148 97 C 109 106 81 102 49 132 C 40 141 32 151 25 163 Z"/>
+  <path fill="#35566D" d="M 25 191 L 62 151 L 76 160 L 103 132 L 148 175 L 166 161 L 188 176 L 213 153 L 231 169 L 231 198 L 25 198 Z"/>
+  <path fill="#14283E" d="M 25 191 L 62 151 L 53 171 L 65 166 L 73 172 L 103 132 L 91 156 L 102 151 L 113 165 L 119 161 L 148 182 L 167 168 L 188 181 L 213 153 L 201 176 L 213 171 L 231 181 L 231 210 L 25 210 Z"/>
+  <path fill="#0E2036" d="M 15 212 L 52 185 L 68 191 L 94 171 L 118 182 L 139 173 L 176 194 L 196 182 L 239 201 C 237 225 221 240 199 240 L 58 240 C 38 240 22 230 15 212 Z"/>
+</svg>
