@@ -3,17 +3,52 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'; object-src 'none'">
-  <title>Codex Animated</title>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Codex startup animation</title>
   <link rel="stylesheet" href="style.css">
-  <script defer src="animation.js"></script>
+  <script src="assets/contours.js" defer></script>
+  <script src="animation.js" defer></script>
 </head>
 <body>
-  <main aria-labelledby="title">
-    <img id="artwork" src="assets/artwork.jpg" alt="" hidden>
-    <canvas id="screen" width="1080" height="720" aria-hidden="true"></canvas>
-    <h1 id="title">Codex <em>Animated</em></h1>
-    <button type="button" id="skip" aria-keyshortcuts="Escape">Skip <kbd>Esc</kbd></button>
+  <main class="window" aria-label="Codex startup animation">
+  <div class="scene" aria-hidden="true">
+    <img class="artwork" src="assets/artwork.jpg" alt="" decoding="async" fetchpriority="high">
+    <canvas class="line-art" width="1536" height="1024"></canvas>
+    <div class="shade"></div>
+    <div class="scanlines"></div>
+    <div class="light-sweep"></div>
+    <div class="particles"></div>
+    <div class="hud">
+      <div class="corner top-left"></div><div class="corner top-right"></div>
+      <div class="corner bottom-left"></div><div class="corner bottom-right"></div>
+      <div class="sync">
+        <div class="sync-label"><span>SYNC RATIO</span><span id="ratio">00.00%</span></div>
+        <div class="sync-track"><div class="sync-fill"></div></div>
+        <span class="sync-phase">INITIALIZING</span>
+      </div>
+      <div class="subtitle"><span id="subtitle">幽灵来到…你身边～</span></div>
+      <div class="coordinates"><span>RESONANCE / AEMEATH</span><span id="timecode">00:00:00</span></div>
+    </div>
+    <div class="boot-grid"></div>
+    <div class="boot-corners"><i class="corner top-left"></i><i class="corner top-right"></i><i class="corner bottom-left"></i><i class="corner bottom-right"></i></div>
+    <div class="intro">
+      <div class="pulse"><i></i><i></i><b></b></div>
+      <div class="identity">
+        <div class="radar">
+          <svg class="dial" viewBox="0 0 400 400"><circle cx="200" cy="200" r="177"/><circle class="dashed" cx="200" cy="200" r="151"/><g class="ticks"></g><path class="crosshair" d="M200 9V61 M200 339V391 M9 200H61 M339 200H391"/></svg>
+          <div class="avatar-frame"><img class="avatar" src="assets/avatar.jpg" alt="" decoding="async"></div>
+          <i class="reticle tl"></i><i class="reticle tr"></i><i class="reticle bl"></i><i class="reticle br"></i>
+        </div>
+        <svg class="wave" viewBox="0 0 400 22"><path d="M0 11 Q15 5 30 11 T60 11 T90 11 T120 11 T150 11 T180 11 T210 11 T240 11 T270 11 T300 11 T330 11 T360 11 T400 11"/></svg>
+        <div class="boot-title">飞行雪绒</div>
+        <div class="boot-caption">CODEX INITIALIZE / TYPE-0</div>
+      </div>
+    </div>
+    <div class="boot-logs"><div>&gt; MAGI SYSTEM · CASPER / MELCHIOR / BALTHASAR</div><div>&gt; loading renderer surface ........ ok</div><div>&gt; entry plug depth 21.6 ........... ok</div><div>&gt; LCL pressure nominal</div></div>
+    <div class="transition-flash" aria-hidden="true"></div>
+  </div>
+  <div class="shutter-line" aria-hidden="true"></div>
+    <button class="skip" type="button" aria-keyshortcuts="Escape">Skip <kbd>Esc</kbd></button>
   </main>
 </body>
 </html>

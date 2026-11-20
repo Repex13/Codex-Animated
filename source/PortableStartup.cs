@@ -11,7 +11,8 @@ internal static class PortableStartup
 {
     private static readonly string[] runtimeFiles = {
         "Microsoft.Web.WebView2.Core.dll", "Microsoft.Web.WebView2.WinForms.dll", "WebView2Loader.dll",
-        "web/index.html", "web/style.css", "web/animation.js", "web/assets/artwork.jpg"
+        "web/index.html", "web/style.css", "web/animation.js", "web/assets/artwork.jpg",
+        "web/assets/avatar.jpg", "web/assets/contours.js"
     };
     private static readonly string[] notices = { "notices/LICENSE.txt", "notices/NOTICE.txt" };
     internal static string BundleDirectory { get; private set; }
@@ -21,14 +22,8 @@ internal static class PortableStartup
     {
         try
         {
-            string besideExe = AppDomain.CurrentDomain.BaseDirectory;
-            if (Array.TrueForAll(runtimeFiles, name => File.Exists(Path.Combine(besideExe, name))))
-                BundleDirectory = besideExe;
-            else
-            {
-                BundleDirectory = PrepareEmbeddedBundle();
-                AppDomain.CurrentDomain.AssemblyResolve += ResolveWebViewAssembly;
-            }
+            BundleDirectory = PrepareEmbeddedBundle();
+            AppDomain.CurrentDomain.AssemblyResolve += ResolveWebViewAssembly;
         }
         catch (Exception ex)
         {

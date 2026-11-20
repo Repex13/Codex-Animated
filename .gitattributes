@@ -1,0 +1,5 @@
+# These files are embedded verbatim in the Windows launcher.
+/web/index.html -text
+/web/style.css -text
+/web/animation.js -text
+/web/assets/contours.js -text

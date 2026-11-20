@@ -1,274 +1,307 @@
+// Windows splash playback, adapted from panding999/codex-startup-animation.
 (() => {
-  "use strict";
-
-  const width = 1080;
-  const height = 720;
+  'use strict';
+  const $ = selector => document.querySelector(selector);
+  const root = $('.window');
+  const art = $('.artwork');
+  const scene = $('.scene');
+  const intro = $('.intro');
+  const hud = $('.hud');
+  const sweep = $('.light-sweep');
+  const subtitle = $('.subtitle');
   const duration = 12000;
-  const background = "#08141d";
-  const inks = ["#60aaab", "#9ae8ce", "#e0f2cf", "#e3b37d"];
-  const art = document.getElementById("artwork");
-  const ctx = document.getElementById("screen").getContext("2d", { alpha: false });
-  const motion = window.matchMedia("(prefers-reduced-motion: reduce)");
-  let finished = false;
-  let frameId = 0;
-  let timer = 0;
+  const motionPreference = window.matchMedia('(prefers-reduced-motion: reduce)');
+  const reduced = motionPreference.matches;
+  let completed = false;
+  let frame = 0;
+  let origin = 0;
+  let lastUI = -Infinity;
 
-  function finish(message) {
-    if (finished) return;
-    finished = true;
-    cancelAnimationFrame(frameId);
-    clearTimeout(timer);
-    motion.removeEventListener("change", motionChanged);
-    if (window.chrome && window.chrome.webview) window.chrome.webview.postMessage(message);
+  function finish(status) {
+    if (completed) return;
+    completed = true;
+    cancelAnimationFrame(frame);
+    root.dataset.completed = 'true';
+    window.chrome?.webview?.postMessage(status);
   }
-  function motionChanged(event) { if (event.matches) finish("complete"); }
-  document.getElementById("skip").addEventListener("click", () => finish("complete"));
-  document.addEventListener("keydown", event => {
-    if (event.key === "Escape") { event.preventDefault(); finish("complete"); }
+
+  $('.skip').addEventListener('click', () => finish('complete'));
+  window.addEventListener('keydown', event => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      finish('complete');
+    }
   });
-  motion.addEventListener("change", motionChanged);
-  if (motion.matches) { finish("complete"); return; }
-
-  function smooth(value) {
-    const x = Math.max(0, Math.min(1, value));
-    return x * x * (3 - 2 * x);
-  }
-  function ramp(t, start, end) { return smooth((t - start) / (end - start)); }
-  function surface(w, h) {
-    const canvas = document.createElement("canvas");
-    canvas.width = w;
-    canvas.height = h;
-    return canvas;
-  }
-  function photoPlate() {
-    const canvas = surface(width, height);
-    const scale = Math.max(width / art.naturalWidth, height / art.naturalHeight);
-    const w = art.naturalWidth * scale;
-    const h = art.naturalHeight * scale;
-    canvas.getContext("2d").drawImage(art, (width - w) / 2, (height - h) / 2, w, h);
-    return canvas;
+  motionPreference.addEventListener('change', event => {
+    if (event.matches) finish('complete');
+  });
+  if (reduced) {
+    finish('complete');
+    return;
   }
 
-  // Marching squares. Each pair joins two sides of a tile at the chosen brightness.
-  // Using the actual image ties the line drawing to whichever wallpaper was picked.
-  const cases = [[], [3, 0], [0, 1], [3, 1], [1, 2], [3, 0, 1, 2], [0, 2], [3, 2],
-    [2, 3], [2, 0], [0, 1, 2, 3], [2, 1], [1, 3], [1, 0], [0, 3], []];
-
-  function makeDrawing(photo) {
-    const cols = 136, rows = 91;
-    const sampler = surface(cols, rows);
-    const sample = sampler.getContext("2d", { willReadFrequently: true });
-    sample.drawImage(photo, 0, 0, cols, rows);
-    const rgba = sample.getImageData(0, 0, cols, rows).data;
-    const values = new Uint8Array(cols * rows);
-    const histogram = new Uint32Array(256);
-    for (let i = 0; i < values.length; i++) {
-      const p = 4 * i;
-      const lum = Math.round(.24 * rgba[p] + .63 * rgba[p + 1] + .13 * rgba[p + 2]);
-      values[i] = lum;
-      histogram[lum]++;
-    }
-    const levels = [];
-    let sum = 0, next = .08;
-    for (let lum = 0; lum < histogram.length; lum++) {
-      sum += histogram[lum] / values.length;
-      if (sum >= next) {
-        if (!levels.length || lum - levels[levels.length - 1] >= 5) levels.push(lum);
-        while (next <= sum) next += .115;
+  const clamp = n => Math.max(0, Math.min(1, n));
+  const smooth = n => { const t = clamp(n); return t*t*(3-2*t); };
+  const particles = Array.from({length: reduced ? 0 : 14}, (_, i) => {
+    const node = document.createElement('i'); node.className = 'particle';
+    const size = i % 4 === 0 ? 3 : 1.5;
+    Object.assign(node.style, {width:`${size}px`,height:`${size}px`,left:`${(i*37+7)%100}%`,top:`${(i*23+17)%100}%`});
+    $('.particles').appendChild(node); return node;
+  });
+  const milestones = [[0,0],[.12,.06],[.35,.41],[.56,.76],[.66,.924],[.72,.97],[.77,1],[1,1]];
+  function progress(t) {
+    const p = t / duration;
+    for (let i=1;i<milestones.length;i++) {
+      if (p <= milestones[i][0]) {
+        const [a,x] = milestones[i-1], [b,y] = milestones[i];
+        return x+(y-x)*smooth((p-a)/(b-a));
       }
     }
-    const groups = inks.map(() => []);
-    const dw = width / (cols - 1), dh = height / (rows - 1);
-    let sequence = 371;
-    function random() {
-      sequence = (Math.imul(sequence, 1664525) + 1013904223) >>> 0;
-      return sequence / 4294967296;
+    return 1;
+  }
+  // Split the selected image's own contours once; no particles are allocated per frame.
+  const canvas = $('.line-art'), ctx = canvas.getContext('2d');
+  function preparePaths(raw) { return raw.map(points => {
+    let total=0;
+    for(let i=1;i<points.length;i++)total+=Math.hypot(points[i][0]-points[i-1][0],points[i][1]-points[i-1][1]);
+    const full=new Path2D();points.forEach((point,i)=>i?full.lineTo(...point):full.moveTo(...point));
+    return {points,total,full};
+  }); }
+  function prepareFragments(paths){
+    const result=[],span=Math.max(18,paths.reduce((sum,path)=>sum+path.total,0)/1400);
+    const noise=n=>{const x=Math.sin(n*127.1+311.7)*43758.5453;return x-Math.floor(x);};
+    function add(points){
+      if(points.length<2)return;
+      const first=points[0],last=points[points.length-1],x=(first[0]+last[0])/2,y=(first[1]+last[1])/2;
+      const seed=result.length+1;
+      result.push({x,y,points:points.map(point=>[point[0]-x,point[1]-y]),
+        sx:(x+(noise(seed)-.5)*440+1536)%1536,sy:(y+(noise(seed+271)-.5)*300+1024)%1024,
+        angle:(noise(seed+563)-.5)*Math.PI*2,seed:noise(seed+811)*Math.PI*2});
     }
-    function segment(group, x1, y1, x2, y2) {
-      const x = (x1 + x2) / 2, y = (y1 + y2) / 2;
-      groups[group].push({
-        x, y, dx: (x2 - x1) / 2, dy: (y2 - y1) / 2,
-        originX: width * (.31 + random() * .38),
-        originY: height * (.38 + random() * .19),
-        bow: (random() - .5) * height * .6,
-        delay: .45 * x / width + .14 * random(), angle: (random() - .5) * 4
-      });
-    }
-    const ex = [0, 0, 0, 0], ey = [0, 0, 0, 0];
-    function fraction(a, b, level) { return a === b ? .5 : (level - a) / (b - a); }
-    levels.forEach((level, index) => {
-      const group = index < 3 ? 0 : index === levels.length - 1 ? 3 : 1 + (index % 2);
-      for (let j = 0; j < rows - 1; j++) {
-        for (let i = 0; i < cols - 1; i++) {
-          const p = i + j * cols;
-          const a = values[p], b = values[p + 1], c = values[p + cols + 1], d = values[p + cols];
-          const sides = cases[(a > level) | ((b > level) << 1) | ((c > level) << 2) | ((d > level) << 3)];
-          if (!sides.length) continue;
-          ex[0] = (i + fraction(a, b, level)) * dw; ey[0] = j * dh;
-          ex[1] = (i + 1) * dw; ey[1] = (j + fraction(b, c, level)) * dh;
-          ex[2] = (i + fraction(d, c, level)) * dw; ey[2] = (j + 1) * dh;
-          ex[3] = i * dw; ey[3] = (j + fraction(a, d, level)) * dh;
-          for (let k = 0; k < sides.length; k += 2) {
-            const m = sides[k], n = sides[k + 1];
-            segment(group, ex[m], ey[m], ex[n], ey[n]);
-          }
+    for(const path of paths){
+      if(path.points.length<2)continue;
+      let chunk=[path.points[0]],used=0;
+      for(let i=1;i<path.points.length;i++){
+        let a=path.points[i-1];const b=path.points[i];
+        let length=Math.hypot(b[0]-a[0],b[1]-a[1]);
+        while(length>0&&used+length>=span){
+          const ratio=(span-used)/length,cut=[a[0]+(b[0]-a[0])*ratio,a[1]+(b[1]-a[1])*ratio];
+          chunk.push(cut);add(chunk);chunk=[cut];a=cut;used=0;
+          length=Math.hypot(b[0]-a[0],b[1]-a[1]);
         }
+        if(length>0){chunk.push(b);used+=length;}
       }
+      add(chunk);
+    }
+    return result;
+  }
+  let paths, fragments;
+  let identityTexture=null,identityPieces=[];
+  function releaseIdentityTexture(){
+    if(identityTexture)identityTexture.width=identityTexture.height=0;
+    identityTexture=null;identityPieces=[];
+  }
+  function prepareIdentityTexture(){
+    releaseIdentityTexture();
+    const bounds=canvas.getBoundingClientRect(),scale=Math.max(bounds.width/1536,bounds.height/1024);
+    if(!scale)return;
+    const ox=bounds.left+(bounds.width-1536*scale)/2,oy=bounds.top+(bounds.height-1024*scale)/2;
+    const rect=node=>{const r=node.getBoundingClientRect();return {x:(r.left-ox)/scale,y:(r.top-oy)/scale,w:r.width/scale,h:r.height/scale};};
+    const texture=document.createElement('canvas');texture.width=1536;texture.height=1024;
+    const ink=texture.getContext('2d');ink.imageSmoothingEnabled=false;
+    const avatar=rect($('.avatar')),radar=rect($('.radar')),border=rect($('.avatar-frame'));
+    const cx=radar.x+radar.w/2,cy=radar.y+radar.h/2;
+    ink.strokeStyle='#a397a0';ink.lineWidth=1.3;
+    ink.beginPath();ink.arc(cx,cy,radar.w*.4425,0,Math.PI*2);ink.stroke();
+    ink.setLineDash([9,12]);ink.globalAlpha=.4;
+    ink.beginPath();ink.arc(cx,cy,radar.w*.3775,0,Math.PI*2);ink.stroke();ink.setLineDash([]);ink.globalAlpha=.8;
+    for(let i=0;i<60;i++){
+      const a=i*Math.PI/30,r0=radar.w*(i%5===0?.4525:.46),r1=radar.w*(i%5===0?.4975:.48);
+      ink.beginPath();ink.moveTo(cx+Math.sin(a)*r0,cy-Math.cos(a)*r0);ink.lineTo(cx+Math.sin(a)*r1,cy-Math.cos(a)*r1);ink.stroke();
+    }
+    ink.globalAlpha=1;ink.strokeRect(border.x,border.y,border.w,border.h);
+    const portrait = $('.avatar');
+    const zoom = Math.max(avatar.w / portrait.naturalWidth, avatar.h / portrait.naturalHeight);
+    const sw = avatar.w / zoom, sh = avatar.h / zoom;
+    ink.drawImage(portrait, (portrait.naturalWidth - sw) / 2, (portrait.naturalHeight - sh) / 2,
+      sw, sh, avatar.x, avatar.y, avatar.w, avatar.h);
+    // Neutralize the bitmap once, not with an expensive live blur/filter on every frame.
+    ink.globalCompositeOperation='saturation';ink.fillStyle='#999';
+    ink.fillRect(avatar.x,avatar.y,avatar.w,avatar.h);ink.globalCompositeOperation='source-over';
+    const textBounds=[];
+    for(const selector of ['.boot-title','.boot-caption']){
+      const node=$(selector),r=rect(node),style=window.getComputedStyle(node);
+      if(node.textContent)textBounds.push(r);
+      ink.font=`${style.fontWeight} ${parseFloat(style.fontSize)/scale}px ${style.fontFamily}`;
+      ink.textAlign='center';ink.textBaseline='middle';ink.fillStyle=style.color;
+      ink.globalAlpha=selector==='.boot-caption'?.5:1;
+      ink.letterSpacing=`${(parseFloat(style.letterSpacing)||0)/scale}px`;
+      ink.fillText(node.textContent,r.x+r.w/2,r.y+r.h/2,r.w);
+    }
+    ink.globalAlpha=1;
+    ink.globalCompositeOperation='source-atop';ink.globalAlpha=.24;ink.fillStyle='#9b9099';
+    ink.fillRect(0,0,1536,1024);ink.globalAlpha=1;ink.globalCompositeOperation='source-over';
+    // Geometric tile selection works for file:// images too, without reading protected pixels.
+    const tile=36,boxes=[avatar,border,...textBounds];
+    const overlaps=(x,y,r)=>x<r.x+r.w&&x+tile>r.x&&y<r.y+r.h&&y+tile>r.y;
+    for(let y=0;y<1024;y+=tile)for(let x=0;x<1536;x+=tile){
+      const w=Math.min(tile,1536-x),h=Math.min(tile,1024-y);
+      const distance=Math.hypot(x+w/2-cx,y+h/2-cy);
+      const onRing=[.3775,.4425,.48].some(radius=>Math.abs(distance-radar.w*radius)<tile);
+      if(onRing||boxes.some(box=>overlaps(x,y,box)))identityPieces.push({x,y,w,h,target:fragments[(identityPieces.length*37)%fragments.length]});
+    }
+    identityTexture=texture;
+    canvas.dataset.identityPieces=String(identityPieces.length);
+    fragments.forEach((fragment,i)=>{
+      const tile=identityPieces[i%identityPieces.length];
+      fragment.ix=tile?tile.x+tile.w/2:cx;fragment.iy=tile?tile.y+tile.h/2:cy;
     });
-
-    // Flat-color images still get a moving aperture before their color is revealed.
-    if (groups.reduce((count, group) => count + group.length, 0) < 80) {
-      for (let ring = 0; ring < 5; ring++) {
-        for (let tick = 0; tick < 96; tick++) {
-          const a = tick * Math.PI / 48, b = (tick + 1) * Math.PI / 48;
-          const r = 65 + ring * 34;
-          segment(ring % inks.length, width / 2 + Math.cos(a) * r * 1.7, height / 2 + Math.sin(a) * r,
-            width / 2 + Math.cos(b) * r * 1.7, height / 2 + Math.sin(b) * r);
-        }
+    for(const tile of identityPieces){tile.target.ix=tile.x+tile.w/2;tile.target.iy=tile.y+tile.h/2;}
+  }
+  function drawIdentityPieces(spread){
+    if(!identityTexture||spread>=1)return;
+    const fade=1-smooth((spread-.03)/.43),size=1-.9*spread;
+    if(fade<=0)return;
+    ctx.globalAlpha=fade;ctx.imageSmoothingEnabled=false;
+    for(const tile of identityPieces){
+      const target=tile.target;
+      const x=(tile.x+tile.w/2)*(1-spread)+target.sx*spread,y=(tile.y+tile.h/2)*(1-spread)+target.sy*spread;
+      const angle=target.angle*spread,cs=Math.cos(angle)*size,sn=Math.sin(angle)*size;
+      ctx.setTransform(cs,sn,-sn,cs,x,y);
+      ctx.drawImage(identityTexture,tile.x,tile.y,tile.w,tile.h,-tile.w/2,-tile.h/2,tile.w,tile.h);
+    }
+    ctx.setTransform(1,0,0,1,0,0);ctx.globalAlpha=1;
+  }
+  let lastTrace=-1;
+  function trace(p,drift=0,spread=1) {
+    const stamp=p===1?1:p+drift*.00001;
+    if(stamp===lastTrace)return;lastTrace=stamp;
+    ctx.clearRect(0,0,1536,1024);
+    ctx.strokeStyle='#c8c0cd';ctx.lineWidth=1.25;ctx.lineCap='round';ctx.lineJoin='round';
+    if(p===1){
+      ctx.globalAlpha=1;paths.forEach(path=>ctx.stroke(path.full));
+    }else{
+      drawIdentityPieces(spread);
+      if(spread>.04){
+      ctx.globalAlpha=.82*smooth((spread-.04)/.36);ctx.beginPath();
+      // Arrival time follows target X, so the left edge resolves before the face and right edge.
+      const front=p*1.5-.25;
+      for(const fragment of fragments){
+        const arrival=smooth((front-fragment.x/1536+.16)/.32),loose=1-arrival;
+        const angle=fragment.angle*loose,cs=Math.cos(angle),sn=Math.sin(angle);
+        const sx=(fragment.ix??fragment.sx)*(1-spread)+fragment.sx*spread;
+        const sy=(fragment.iy??fragment.sy)*(1-spread)+fragment.sy*spread;
+        const x=sx*loose+fragment.x*arrival+Math.sin(drift*.8+fragment.seed)*7*loose*spread;
+        const y=sy*loose+fragment.y*arrival+Math.cos(drift*.6+fragment.seed)*7*loose*spread;
+        const size=.16+.84*arrival;
+        fragment.points.forEach((point,i)=>{
+          const px=x+(point[0]*cs-point[1]*sn)*size,py=y+(point[0]*sn+point[1]*cs)*size;
+          if(i)ctx.lineTo(px,py);else ctx.moveTo(px,py);
+        });
+      }
+      ctx.stroke();ctx.globalAlpha=1;
       }
     }
-    const plate = surface(width, height), ink = plate.getContext("2d");
-    ink.lineWidth = 1.3;
-    groups.forEach((group, i) => {
-      ink.beginPath();
-      for (const s of group) {
-        ink.moveTo(s.x - s.dx, s.y - s.dy);
-        ink.lineTo(s.x + s.dx, s.y + s.dy);
-      }
-      ink.strokeStyle = inks[i];
-      ink.stroke();
+    canvas.dataset.progress=p.toFixed(3);canvas.dataset.fragments=String(fragments.length);
+  }
+  for(let i=0;i<60;i++){
+    const tick=document.createElementNS('http://www.w3.org/2000/svg','line');
+    const angle=i*Math.PI/30,inner=i%5===0?181:184;
+    tick.setAttribute('x1',200+Math.sin(angle)*inner);tick.setAttribute('y1',200-Math.cos(angle)*inner);
+    tick.setAttribute('x2',200+Math.sin(angle)*(i%5===0?199:192));tick.setAttribute('y2',200-Math.cos(angle)*(i%5===0?199:192));
+    tick.style.opacity=i%5===0?'.9':'.55';$('.ticks').appendChild(tick);
+  }
+  function render(t) {
+    const s=t/1000, p=progress(t), color=smooth((s-7.18)/.24), collapse=smooth((s-11)/.3), pinch=smooth((s-11.65)/.35);
+    const dissolve=smooth((s-4.18)/.56);
+    const closing=s>=11;
+    scene.style.opacity=collapse>=1?'0':'1';
+    scene.style.transform=`scaleY(${Math.max(.001,1-collapse)})`;
+    scene.style.filter=closing?`brightness(${1+collapse*3})`:'none';
+    $('.transition-flash').style.opacity=String(reduced?0:smooth((s-7.18)/.035)*(1-smooth((s-7.22)/.2))*.8);
+    const line=$('.shutter-line');
+    line.style.opacity=String(smooth((s-11.15)/.15)*(1-smooth((s-11.96)/.04)));
+    line.style.transform=`scaleX(${1-pinch})`;
+
+    intro.style.opacity=String(reduced?1-smooth((s-4.18)/.56):s<4.18?1:0);
+    $('.identity').style.opacity=String(smooth((s-1.05)/.65));
+    $('.identity').style.transform=`translate(-50%,-43%) scale(${.94+.06*smooth((s-1.05)/.65)})`;
+    const beat=reduced?0:Math.pow((1-Math.cos(Math.max(0,s-1.05)*Math.PI*2/1.08))/2,2);
+    $('.avatar-frame').style.transform=`translateY(${-4*beat}px) scale(${1+.025*beat})`;
+    $('.pulse').style.opacity=String(1-smooth((s-1.15)/.5));
+    document.querySelectorAll('.pulse i').forEach((ring,i)=>{
+      const phase=(s*.75+i*.5)%1;
+      ring.style.transform=`scale(${.25+phase*.9})`;ring.style.opacity=String((1-phase)*.8);
     });
-    // Hold a full-resolution tracing on the plate; bound the number of moving pieces.
-    const stride = Math.max(1, Math.ceil(groups.reduce((n, g) => n + g.length, 0) / 2000));
-    return { plate, moving: groups.map(group => group.filter((_, i) => i % stride === 0)) };
-  }
-
-  function makeBench() {
-    const sheet = surface(width, height), g = sheet.getContext("2d");
-    const glow = g.createRadialGradient(540, 325, 30, 540, 325, 630);
-    glow.addColorStop(0, "#163842"); glow.addColorStop(.65, "#0e242f"); glow.addColorStop(1, background);
-    g.fillStyle = glow; g.fillRect(0, 0, width, height);
-    g.fillStyle = "#3b5b60";
-    for (let x = 28; x < width; x += 26) for (let y = 20; y < height; y += 26) g.fillRect(x, y, 1.25, 1.25);
-    g.strokeStyle = "#476368"; g.lineWidth = 1; g.beginPath();
-    for (let i = 0; i < 45; i++) {
-      const x = 56 + i * 22, length = i % 4 === 0 ? 8 : 3;
-      g.moveTo(x, 36); g.lineTo(x, 36 + length);
+    $('.dashed').style.transformOrigin='200px 200px';$('.dashed').style.transform=`rotate(${reduced?0:s*16}deg)`;
+    $('.boot-title').style.clipPath=`inset(0 ${(1-clamp((s-1.9)/.7))*100}% 0 0)`;
+    $('.boot-caption').style.opacity=String(smooth((s-2.5)/.35)*.5);
+    $('.wave').style.transform=`scaleY(${reduced?1:.6+Math.sin(s*6)*.4})`;
+    $('.boot-grid').style.opacity=String(smooth((s-.8)/.6)*(1-color));
+    $('.boot-corners').style.opacity=String(smooth((s-.8)/.6)*(1-color));
+    $('.boot-logs').style.opacity=String((1-color)*.55);
+    document.querySelectorAll('.boot-logs div').forEach((line,i)=>line.style.opacity=String(smooth((s-.15-i*.38)/.3)));
+    const assembling=clamp((s-5.08)/2.02);
+    if(s>=4.18&&s<7.43)trace(reduced?1:assembling,s-4.18,reduced?1:dissolve);
+    if(s>=4.74&&identityTexture)releaseIdentityTexture();
+    canvas.style.opacity=String((reduced?smooth((s-4.18)/.56):s>=4.18?1:0)*(1-color));
+    canvas.dataset.dissolve=dissolve.toFixed(3);
+    art.style.opacity=String(fragments.length ? color : smooth((s-4.18)/2.9));
+    // The art stays registered to the contours until the color transition finishes.
+    art.style.transform=reduced?'none':`scale(${1+.012*smooth((s-7.42)/3.58)})`;
+    $('.shade').style.opacity=String(color);
+    hud.style.opacity=String(smooth((s-7.24)/.45));
+    $('.sync-fill').style.transform=`scaleX(${p})`;
+    sweep.style.opacity=reduced?'0':String(Math.sin(clamp((s-7.18)/.8)*Math.PI)*.1);
+    sweep.style.transform=`translateX(${(-60+clamp((s-7.18)/.8)*120)}%)`;
+    particles.forEach((node,i)=>{
+      node.style.opacity=String(color*(.12+.28*(.5+.5*Math.sin(s*.9+i))));
+      node.style.transform=`translate(${Math.sin(s*.4+i)*8}px,${-s*(2+i%3)}px)`;
+    });
+    subtitle.style.opacity=String(smooth((s-7.6)/.4)*(1-smooth((s-10.65)/.25)));
+    if(Math.abs(t-lastUI)>60 || t===0 || t>=duration) {
+      lastUI=t;
+      $('#ratio').textContent=`${(p*100).toFixed(2).padStart(5,'0')}%`;
+      $('.sync-phase').textContent=s<6.5?'INITIALIZING':p<1?'SYNCHRONIZING':'SYNC COMPLETE';
+      $('#timecode').textContent=`00:${String(Math.floor(s)).padStart(2,'0')}:${String(Math.floor(s%1*30)).padStart(2,'0')}`;
+      root.dataset.elapsed=s.toFixed(2);
+      root.dataset.stage=s>=11?'shutter':s<1.15?'pulse':s<4.18?'identity':s<4.74?'dispersing':s<5.08?'scattered':s<7.18?'drawing':s<7.43?'colorize':'portrait';
     }
-    g.stroke();
-    return sheet;
   }
 
-  function drawGate(t, opacity, photo) {
-    const acquire = ramp(t, .08, 1.85);
-    const cx = 540 + (1 - acquire) * 74, cy = 337 - (1 - acquire) * 34;
-    const w = 16 + 451 * acquire, h = 60 + 198 * ramp(t, .36, 1.66);
-    const x = cx - w / 2, y = cy - h / 2;
-    ctx.save();
-    ctx.globalAlpha = opacity;
-    ctx.save(); ctx.beginPath(); ctx.rect(x, y, w, h); ctx.clip();
-    ctx.fillStyle = "#06202a"; ctx.fillRect(x, y, w, h);
-    const zoom = 1.42 - .34 * acquire;
-    ctx.drawImage(photo, cx - width * zoom * .5, cy - height * zoom * .48, width * zoom, height * zoom);
-    const sweep = x + w * ramp(t, .4, 2.15);
-    ctx.fillStyle = "rgba(10,35,44,.65)"; ctx.fillRect(sweep, y, x + w - sweep, h);
-    ctx.fillStyle = "#dcffd9"; ctx.fillRect(sweep, y, 2, h);
-    ctx.restore();
-    ctx.strokeStyle = "#a6d9ce"; ctx.lineWidth = 1;
-    ctx.strokeRect(x - 5, y - 5, w + 10, h + 10);
-    ctx.strokeStyle = "#ffd39c"; ctx.lineWidth = 2.7; ctx.beginPath();
-    for (let i = 0; i < 4; i++) {
-      const sx = i % 2 ? -1 : 1, sy = i < 2 ? 1 : -1;
-      const px = (sx > 0 ? x : x + w) - sx * 10, py = (sy > 0 ? y : y + h) - sy * 10;
-      ctx.moveTo(px + sx * 20, py); ctx.lineTo(px, py); ctx.lineTo(px, py + sy * 13);
+  function tick(now) {
+    if (completed) return;
+    const elapsed = Math.min(duration, now - origin);
+    render(elapsed);
+    if (elapsed >= duration) {
+      finish('complete');
+      return;
     }
-    ctx.stroke();
-    ctx.strokeStyle = "#d9f6d7"; ctx.lineWidth = 1; ctx.beginPath();
-    ctx.moveTo(cx - 11, cy); ctx.lineTo(cx - 4, cy); ctx.moveTo(cx + 4, cy); ctx.lineTo(cx + 11, cy);
-    ctx.moveTo(cx, cy - 11); ctx.lineTo(cx, cy - 4); ctx.moveTo(cx, cy + 4); ctx.lineTo(cx, cy + 11);
-    ctx.stroke(); ctx.restore();
+    frame = requestAnimationFrame(tick);
   }
 
-  function assemble(t, drawing) {
-    const progress = (t - 2.1) / 3.7;
-    ctx.globalAlpha = ramp(t, 2.05, 2.75);
-    ctx.lineWidth = 1.65;
-    for (let group = 0; group < drawing.moving.length; group++) {
-      ctx.beginPath();
-      ctx.strokeStyle = inks[group];
-      const pieces = drawing.moving[group];
-      for (let i = 0; i < pieces.length; i++) {
-        const s = pieces[i], mix = smooth((progress - s.delay) * 2.5);
-        const trail = (1 - mix) * Math.min(1, progress * 4);
-        const x = s.originX + (s.x - s.originX) * mix;
-        const y = s.originY + (s.y - s.originY) * mix + Math.sin(mix * Math.PI) * s.bow;
-        const theta = s.angle * (1 - mix);
-        const cos = Math.cos(theta), sin = Math.sin(theta);
-        const dx = (s.dx * cos - s.dy * sin) * (.5 + .5 * mix) + 8 * trail;
-        const dy = (s.dx * sin + s.dy * cos) * (.5 + .5 * mix);
-        ctx.moveTo(x - dx, y - dy); ctx.lineTo(x + dx, y + dy);
-      }
-      ctx.stroke();
+  async function start() {
+    await Promise.all([art.decode(), $('.avatar').decode()]);
+    if (completed) return;
+    if (!ctx) {
+      finish('assetError');
+      return;
     }
-    ctx.globalAlpha = 1;
-  }
-
-  function colorWipe(t, photo) {
-    const p = ramp(t, 6.45, 8.75);
-    const x = -210 + p * (width + 420);
-    ctx.save(); ctx.beginPath();
-    ctx.moveTo(0, 0); ctx.lineTo(x + 180, 0); ctx.lineTo(x - 180, height); ctx.lineTo(0, height);
-    ctx.closePath(); ctx.clip(); ctx.drawImage(photo, 0, 0); ctx.restore();
-    ctx.strokeStyle = "#ffe3b3"; ctx.lineWidth = 2; ctx.beginPath();
-    ctx.moveTo(x + 180, 0); ctx.lineTo(x - 180, height); ctx.stroke();
-  }
-
-  function shutter(t) {
-    const p = ramp(t, 10.65, 11.66);
-    const a = (height / 2 + 84) * p - 84, b = a - 54;
-    ctx.fillStyle = background;
-    ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(width, 0); ctx.lineTo(width, b); ctx.lineTo(0, a + 54); ctx.fill();
-    ctx.beginPath(); ctx.moveTo(0, height); ctx.lineTo(width, height);
-    ctx.lineTo(width, height - a - 54); ctx.lineTo(0, height - b); ctx.fill();
-    if (t < 11.66) return;
-    const span = width * (1 - ramp(t, 11.66, 11.98));
-    ctx.strokeStyle = "#def8d8"; ctx.lineWidth = 1.5; ctx.beginPath();
-    ctx.moveTo((width - span) / 2, height / 2 + 54 * span / width);
-    ctx.lineTo((width + span) / 2, height / 2 - 54 * span / width); ctx.stroke();
-  }
-
-  async function play() {
-    await art.decode();
-    if (finished) return;
-    if (!ctx) { finish("assetError"); return; }
-    const photo = photoPlate(), drawing = makeDrawing(photo), bench = makeBench();
-    const shade = ctx.createLinearGradient(0, height * .6, 0, height);
-    shade.addColorStop(0, "rgba(5,15,22,0)"); shade.addColorStop(1, "rgba(5,15,22,.72)");
-    const begin = performance.now();
-    function render(now) {
-      if (finished) return;
-      const t = Math.max(0, (now - begin) / 1000);
-      if (t < 8.75) {
-        ctx.drawImage(bench, 0, 0);
-        if (t < 3.4) drawGate(t, 1 - ramp(t, 2.35, 3.4), photo);
-        if (t > 2.1) {
-          if (t < 5.95) assemble(t, drawing);
-          ctx.globalAlpha = ramp(t, 4.9, 5.95); ctx.drawImage(drawing.plate, 0, 0); ctx.globalAlpha = 1;
-        }
-        if (t > 6.45) colorWipe(t, photo);
-      } else {
-        const zoom = 1 + .035 * ramp(t, 8.75, 11.35);
-        ctx.drawImage(photo, width * (1 - zoom) / 2, height * (1 - zoom) / 2, width * zoom, height * zoom);
-      }
-      ctx.fillStyle = shade; ctx.fillRect(0, 0, width, height);
-      if (t > 10.65) shutter(t);
-      if (t >= duration / 1000) finish("complete");
-      else frameId = requestAnimationFrame(render);
+    paths = preparePaths(window.traceWallpaper ? window.traceWallpaper(art) : window.CONTOUR_PATHS || []);
+    fragments = prepareFragments(paths);
+    // A flat custom image can have no outlines. Its color layer fades in on its own.
+    render(4179);
+    if (fragments.length) {
+      prepareIdentityTexture();
+      drawIdentityPieces(0);
     }
-    document.body.classList.add("playing");
-    frameId = requestAnimationFrame(render);
-    // Backgrounded WebViews can pause animation frames during a desktop switch.
-    timer = setTimeout(() => finish("complete"), duration + 75);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    lastTrace = -1;
+    lastUI = -Infinity;
+    render(0);
+    origin = performance.now();
+    frame = requestAnimationFrame(tick);
   }
-  play().catch(() => finish("assetError"));
+
+  start().catch(() => finish('assetError'));
 })();

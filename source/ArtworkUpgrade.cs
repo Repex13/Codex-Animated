@@ -10,7 +10,7 @@ using System.Threading;
 
 internal static class ArtworkUpgrade
 {
-    // SHA-256 of the EXE in the v1.0 and v1.1 downloads, then the previous local picker build.
+    // SHA-256 of previously shipped launchers and the previous local picker build.
     private static bool PreviousBuild(string path)
     {
         using (var file = File.OpenRead(path))
@@ -19,7 +19,8 @@ internal static class ArtworkUpgrade
             string hash = BitConverter.ToString(sha.ComputeHash(file)).Replace("-", "");
             return hash == "4B65AFB848880C7E79E99497D0925096AB3D58EECE575019BB2986DDC4969983" ||
                 hash == "78CC9FB2C66E5BC07CF5FF19FEA1EC5A246D654A8AAE8B076E9CA72FFD1409F1" ||
-                hash == "C9E8E7BBE9AAC7B7A04402A898966E2402133EBD1019B35478187E31E9E59AC9";
+                hash == "C9E8E7BBE9AAC7B7A04402A898966E2402133EBD1019B35478187E31E9E59AC9" ||
+                hash == "727B588143FF147834ADB78392B24B4918FE4FC40C556853666D73D695B8133A";
         }
     }
 

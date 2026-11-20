@@ -13,9 +13,9 @@ using Microsoft.Web.WebView2.WinForms;
 
 [assembly: AssemblyTitle("Codex Animated")]
 [assembly: AssemblyProduct("Codex Animated")]
-[assembly: AssemblyDescription("Windows launcher with an aurora splash and window artwork for Codex")]
-[assembly: AssemblyVersion("1.2.0.0")]
-[assembly: AssemblyFileVersion("1.2.0.0")]
+[assembly: AssemblyDescription("Windows launcher with the sunset startup animation and wallpaper for Codex")]
+[assembly: AssemblyVersion("1.2.1.0")]
+[assembly: AssemblyFileVersion("1.2.1.0")]
 
 internal static class Launcher
 {
@@ -132,106 +132,31 @@ internal static class Launcher
 
 internal sealed class LauncherTheme
 {
-    private static readonly string[] CommonFiles = {
-        "index.html", "style.css", "animation.js", "assets/artwork.jpg"
-    };
-    private static readonly string[] PortraitFiles = {
-        "assets/avatar.jpg", "assets/contours.js", "assets/trace-wallpaper.js"
-    };
     private readonly string root;
-    private readonly bool portrait;
-    private LauncherTheme(string root, bool portrait) { this.root = root; this.portrait = portrait; }
+
+    private LauncherTheme(string root) { this.root = root; }
 
     internal static LauncherTheme Current
     {
-        get
-        {
-            string packaged = Path.Combine(PortableStartup.BundleDirectory, "web");
-            string besideExe = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "web");
-            string installed = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "Programs", "Codex Animated", "web");
-            if (!String.Equals(besideExe, packaged, StringComparison.OrdinalIgnoreCase) &&
-                CompletePortrait(besideExe)) return new LauncherTheme(besideExe, true);
-            return Select(packaged, installed);
-        }
+        get { return new LauncherTheme(Path.Combine(PortableStartup.BundleDirectory, "web")); }
     }
 
     internal static string DefaultWallpaperPath { get { return Current.WallpaperPath; } }
     internal string WallpaperPath { get { return Path.Combine(root, "assets", "artwork.jpg"); } }
 
-    internal static LauncherTheme Select(string packaged, string installed)
-    {
-        // The original Windows installation has a portrait, stored outlines, and a
-        // tracer for selected images. Its local resources can accompany this runtime.
-        if (CompletePortrait(packaged))
-            return new LauncherTheme(packaged, true);
-        if (Complete(packaged, CommonFiles) && LocalInstallation(installed) && CompletePortrait(installed))
-            return new LauncherTheme(installed, true);
-        return new LauncherTheme(packaged, false);
-    }
-
-    private static bool CompletePortrait(string folder)
-    {
-        return Complete(folder, CommonFiles) && Complete(folder, PortraitFiles) && PortraitEntry(folder);
-    }
-
-    private static bool PortraitEntry(string folder)
-    {
-        try
-        {
-            string entry = File.ReadAllText(Path.Combine(folder, "index.html"));
-            return entry.Contains("assets/contours.js") && entry.Contains("assets/avatar.jpg");
-        }
-        catch (IOException) { return false; }
-        catch (UnauthorizedAccessException) { return false; }
-    }
-
-    private static bool LocalInstallation(string folder)
-    {
-        try
-        {
-            var directory = new DirectoryInfo(Path.Combine(folder, "assets"));
-            if (!directory.Exists || new Uri(directory.FullName).IsUnc ||
-                new DriveInfo(directory.Root.FullName).DriveType == DriveType.Network) return false;
-            // An implicitly discovered installed theme must resolve inside the local folder.
-            for (; directory != null; directory = directory.Parent)
-                if ((directory.Attributes & FileAttributes.ReparsePoint) != 0) return false;
-            return true;
-        }
-        catch (IOException) { return false; }
-        catch (UnauthorizedAccessException) { return false; }
-    }
-
-    private static bool Complete(string folder, string[] names)
-    {
-        if (!Directory.Exists(folder)) return false;
-        try
-        {
-            foreach (string name in names)
-            {
-                var file = new FileInfo(Path.Combine(folder, name));
-                if (!file.Exists || file.Length == 0 || (file.Attributes & FileAttributes.ReparsePoint) != 0)
-                    return false;
-            }
-            return true;
-        }
-        catch (IOException) { return false; }
-        catch (UnauthorizedAccessException) { return false; }
-    }
-
     internal Dictionary<string, byte[]> ReadFiles(string settingsDirectory)
     {
         var settings = new WallpaperSettings(WallpaperPath, settingsDirectory);
-        var files = new Dictionary<string, byte[]>(StringComparer.Ordinal);
-        foreach (string name in CommonFiles)
-            files.Add(name, name == "assets/artwork.jpg" ? settings.LoadJpeg() : Read(name));
-        if (portrait)
+        byte[] wallpaper = settings.LoadJpeg();
+        return new Dictionary<string, byte[]>(StringComparer.Ordinal)
         {
-            bool custom = settings.HasCustomWallpaper;
-            files.Add("assets/avatar.jpg", custom ? files["assets/artwork.jpg"] : Read("assets/avatar.jpg"));
-            files.Add("assets/contours.js", Read(custom ? "assets/trace-wallpaper.js" : "assets/contours.js"));
-        }
-        return files;
+            { "index.html", Read("index.html") },
+            { "style.css", Read("style.css") },
+            { "animation.js", Read("animation.js") },
+            { "assets/artwork.jpg", wallpaper },
+            { "assets/avatar.jpg", wallpaper },
+            { "assets/contours.js", Read("assets/contours.js") }
+        };
     }
 
     private byte[] Read(string name)
