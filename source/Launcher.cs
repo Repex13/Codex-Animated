@@ -14,8 +14,8 @@ using Microsoft.Web.WebView2.WinForms;
 [assembly: AssemblyTitle("Codex Animated")]
 [assembly: AssemblyProduct("Codex Animated")]
 [assembly: AssemblyDescription("Windows launcher with an aurora splash and window artwork for Codex")]
-[assembly: AssemblyVersion("1.0.0.0")]
-[assembly: AssemblyFileVersion("1.0.0.0")]
+[assembly: AssemblyVersion("1.1.0.0")]
+[assembly: AssemblyFileVersion("1.1.0.0")]
 
 internal static class Launcher
 {
@@ -173,7 +173,9 @@ internal sealed class Splash : Form
         {
             string root = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "web");
             foreach (string name in ContentTypes.Keys)
-                files.Add(Origin + name, File.ReadAllBytes(Path.Combine(root, name)));
+                files.Add(Origin + name, name == "assets/artwork.jpg"
+                    ? new WallpaperSettings().LoadJpeg()
+                    : File.ReadAllBytes(Path.Combine(root, name)));
             string profile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "Codex Animated", "WebView2");
             var options = new CoreWebView2EnvironmentOptions();

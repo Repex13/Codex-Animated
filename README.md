@@ -14,6 +14,14 @@ You’ll need 64-bit Windows (x64), the official Codex desktop app installed for
 
 Choose **Skip** or press **Esc** to go straight to Codex. The launcher also skips playback when Windows requests reduced motion. To watch just the animation, run `.\CodexAnimated.exe --preview` from PowerShell in the extracted folder.
 
+If you are upgrading from an earlier release, choose **Exit artwork** from its notification-area icon before running the new launcher.
+
+## Choose a wallpaper
+
+Right-click **Codex Animated artwork** in the Windows notification area and select **Choose wallpaper…**. Pick a JPEG, PNG, or BMP. The image appears immediately in the Codex window and its Windows previews. The next startup animation uses it too.
+
+The launcher saves a local copy, so you can move or delete the original. Choose **Restore default wallpaper** from the same menu to return to the aurora.
+
 ## While using Codex
 
 The helper draws the artwork at 15% opacity across the Codex window. Text and controls pick up a slight tint, and clicks pass through to the app. The artwork stays with Codex when you drag, resize, maximize, or switch apps.
@@ -38,7 +46,7 @@ The script uses the 64-bit .NET Framework C# compiler and the WebView2 SDK DLLs 
 
 ## Uninstall
 
-Choose **Exit artwork** in the notification area, delete the extracted folder, and remove any shortcut you created. To remove the launcher's WebView2 profile as well, delete `%LOCALAPPDATA%\Codex Animated\WebView2`.
+Choose **Exit artwork** in the notification area, delete the extracted folder, and remove any shortcut you created. The WebView2 profile and your saved wallpaper are in `%LOCALAPPDATA%\Codex Animated`. Delete that folder if you also want to clear those personal settings.
 
 ## Credits
 

@@ -13,9 +13,9 @@ internal sealed class PreviewArtworkChild : NativeWindow, IDisposable
     private readonly uint parentPid;
     private readonly uint parentThread;
     private readonly IntPtr dpiContext;
-    private readonly Bitmap image;
+    private Bitmap image;
     private Size presented;
-    private bool enabled = true;
+    private bool enabled = true, imageChanged;
 
     internal PreviewArtworkChild(IntPtr parent, uint expectedPid, Bitmap image)
     {
@@ -47,18 +47,18 @@ internal sealed class PreviewArtworkChild : NativeWindow, IDisposable
         finally { SetThreadDpiAwarenessContext(previous); }
     }
 
+    internal void SetImage(Bitmap replacement)
+    {
+        image = replacement;
+        imageChanged = true;
+    }
+
     internal void SetEnabled(bool value)
     {
         if (enabled == value) return;
         enabled = value;
         if (Handle == IntPtr.Zero) return;
         if (!value) ShowWindow(Handle, 0);
-        else if (!presented.IsEmpty)
-        {
-            // Reuse the retained pixels even when artwork is re-enabled from the
-            // tray while the host is minimized. Preserve focus, position and Z-order.
-            SetWindowPos(Handle, IntPtr.Zero, 0, 0, 0, 0, 0x0040 | 0x0010 | 0x0004 | 0x0002 | 0x0001);
-        }
     }
 
     internal bool RefreshSurface()
@@ -66,21 +66,26 @@ internal sealed class PreviewArtworkChild : NativeWindow, IDisposable
         uint pid;
         if (Handle == IntPtr.Zero || GetWindowThreadProcessId(parent, out pid) != parentThread || pid != parentPid)
             return false;
-        // Preserve the source's last submitted image for taskbar previews while minimized.
-        if (!enabled || IsIconic(parent) || !IsWindowVisible(parent)) return true;
+        // Use the last valid viewport when a wallpaper changes while minimized.
+        bool liveBounds = enabled && !IsIconic(parent) && IsWindowVisible(parent);
+        if (!liveBounds && (presented.IsEmpty || (!enabled && !imageChanged))) return true;
         IntPtr previous = SetThreadDpiAwarenessContext(dpiContext);
         if (previous == IntPtr.Zero) throw new Win32Exception();
-        try { return Present(); }
+        try { return Present(liveBounds); }
         finally { SetThreadDpiAwarenessContext(previous); }
     }
 
-    private bool Present()
+    private bool Present(bool liveBounds)
     {
-        Rect rect;
-        if (!GetClientRect(parent, out rect) || rect.Right <= 0 || rect.Bottom <= 0)
-            return true;
-        Size size = new Size(rect.Right, rect.Bottom);
-        if (size != presented)
+        Size size = presented;
+        if (liveBounds)
+        {
+            Rect rect;
+            if (!GetClientRect(parent, out rect) || rect.Right <= 0 || rect.Bottom <= 0)
+                return true;
+            size = new Size(rect.Right, rect.Bottom);
+        }
+        if (size != presented || imageChanged)
         {
             using (var frame = new Bitmap(size.Width, size.Height, PixelFormat.Format32bppRgb))
             {
@@ -114,11 +119,17 @@ internal sealed class PreviewArtworkChild : NativeWindow, IDisposable
                 }
             }
             presented = size;
+            imageChanged = false;
         }
-        if (!IsWindowVisible(Handle) || GetWindow(parent, 5) != Handle)
+        // Read this child's own visibility bit. A hidden parent otherwise appears
+        // to hide every child, even when its thumbnail surface is ready.
+        bool shown = (GetWindowLongPtrW(Handle, -16).ToInt64() & 0x10000000) != 0;
+        if (enabled && (!shown || (liveBounds && GetWindow(parent, 5) != Handle)))
         {
-            // HWND_TOP here acts only within this parent's siblings.
-            if (!SetWindowPos(Handle, IntPtr.Zero, 0, 0, 0, 0, 0x0040 | 0x0010 | 0x0001))
+            // HWND_TOP acts only among siblings. Retain the position and Z-order while minimized.
+            uint flags = 0x0040 | 0x0010 | 0x0001;
+            if (!liveBounds) flags |= 0x0004 | 0x0002;
+            if (!SetWindowPos(Handle, IntPtr.Zero, 0, 0, 0, 0, flags))
                 throw new Win32Exception();
         }
         return true;

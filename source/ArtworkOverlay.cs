@@ -14,7 +14,8 @@ internal sealed class ArtworkOverlay : ApplicationContext
     private const uint MoveSizeStart = 0x000A, MoveSizeEnd = 0x000B;
     private const uint LocationEvent = 0x800B;
     private const int IdleInterval = 350, DragInterval = 16;
-    private readonly Bitmap source;
+    private readonly WallpaperSettings settings;
+    private Bitmap source;
     private PreviewArtworkChild child;
     private ArtworkWindow artwork;
     private bool childUnavailable, refreshing;
@@ -24,6 +25,7 @@ internal sealed class ArtworkOverlay : ApplicationContext
     private readonly Icon trayIcon;
     private readonly ContextMenuStrip menu = new ContextMenuStrip();
     private readonly ToolStripMenuItem toggle = new ToolStripMenuItem("Hide artwork");
+    private readonly ToolStripMenuItem restore = new ToolStripMenuItem("Restore default wallpaper");
     private readonly Native.EventCallback onEvent;
     private IntPtr foregroundHook, locationHook, moveSizeHook, target;
     private uint targetPid, targetThread;
@@ -33,21 +35,25 @@ internal sealed class ArtworkOverlay : ApplicationContext
 
     internal static void Run()
     {
-        string path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "web", "assets", "artwork.jpg");
-        using (var source = new Bitmap(path))
-        using (var overlay = new ArtworkOverlay(source))
+        using (var overlay = new ArtworkOverlay(new WallpaperSettings()))
             Application.Run(overlay);
     }
 
-    private ArtworkOverlay(Bitmap source)
+    private ArtworkOverlay(WallpaperSettings settings)
     {
-        this.source = source;
+        this.settings = settings;
+        source = settings.LoadBitmap();
         toggle.Click += delegate {
             enabled = !enabled;
             toggle.Text = enabled ? "Hide artwork" : "Show artwork";
             SetCodexTransitions(enabled);
             RefreshArtwork();
         };
+        menu.Items.Add("Choose wallpaper\u2026", null, delegate { ChooseWallpaper(); });
+        restore.Enabled = settings.HasCustomWallpaper;
+        restore.Click += delegate { TryChangeWallpaper(null); };
+        menu.Items.Add(restore);
+        menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(toggle);
         menu.Items.Add("Exit artwork", null, delegate { EndSession(); });
         tray.Text = "Codex Animated artwork";
@@ -64,6 +70,45 @@ internal sealed class ArtworkOverlay : ApplicationContext
         timer.Interval = IdleInterval;
         timer.Tick += delegate { RefreshArtwork(); };
         timer.Start();
+    }
+
+    private void ChooseWallpaper()
+    {
+        using (var dialog = new OpenFileDialog {
+            Title = "Choose a Codex wallpaper",
+            Filter = "Wallpaper images (*.jpg, *.jpeg, *.png, *.bmp)|*.jpg;*.jpeg;*.png;*.bmp",
+            RestoreDirectory = true
+        })
+        {
+            if (dialog.ShowDialog() == DialogResult.OK && !shuttingDown)
+                TryChangeWallpaper(dialog.FileName);
+        }
+    }
+
+    private void TryChangeWallpaper(string fileName)
+    {
+        try { ChangeWallpaper(fileName); }
+        catch (Exception error)
+        {
+            if (!(error is IOException || error is InvalidDataException || error is UnauthorizedAccessException || error is ArgumentException ||
+                error is ExternalException || error is NotSupportedException ||
+                error is System.Security.SecurityException)) throw;
+            MessageBox.Show("Could not change the wallpaper.\n\n" + error.Message,
+                "Codex Animated", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+    }
+
+    private void ChangeWallpaper(string fileName)
+    {
+        // The store returns an unlocked image only after it has saved the choice.
+        Bitmap next = fileName == null ? settings.Reset() : settings.Import(fileName);
+        Bitmap old = source;
+        source = next;
+        if (child != null) child.SetImage(next);
+        if (artwork != null) artwork.SetImage(next);
+        old.Dispose();
+        restore.Enabled = settings.HasCustomWallpaper;
+        RefreshArtwork();
     }
 
     private void WindowChanged(IntPtr hook, uint kind, IntPtr window, int objectId, int childId,
@@ -176,13 +221,12 @@ internal sealed class ArtworkOverlay : ApplicationContext
             EndSession();
             return;
         }
+        if (!childUnavailable && (enabled || child != null) && TryChildArtwork()) return;
         if (!enabled)
         {
-            if (child != null) child.SetEnabled(false);
             if (artwork != null) artwork.Conceal();
             return;
         }
-        if (!childUnavailable && TryChildArtwork()) return;
         // Only one renderer is visible. The independent owned window is used when
         // Windows cannot attach a layered child to this application window.
         if (artwork == null)
@@ -218,7 +262,7 @@ internal sealed class ArtworkOverlay : ApplicationContext
                 child = new PreviewArtworkChild(target, targetPid, source);
                 return true;
             }
-            child.SetEnabled(true);
+            child.SetEnabled(enabled);
             if (child.RefreshSurface()) return true;
         }
         catch (Exception error)
@@ -266,26 +310,34 @@ internal sealed class ArtworkOverlay : ApplicationContext
             menu.Dispose();
             if (child != null) child.Dispose();
             if (artwork != null) artwork.Dispose();
+            source.Dispose();
         }
         base.Dispose(disposing);
     }
 
     private sealed class ArtworkWindow : Form
     {
-        private readonly Surface source;
-        private Surface current, previousSize;
+        private Bitmap image;
+        private Surface source, current, previousSize;
         private Rectangle placed;
         private bool shown;
         private IntPtr codexOwner;
 
         internal ArtworkWindow(Bitmap source)
         {
-            this.source = new Surface(source.GetHbitmap(), source.Size);
+            image = source;
             FormBorderStyle = FormBorderStyle.None;
             ShowInTaskbar = false;
             AutoScaleMode = AutoScaleMode.None;
             // UpdateLayeredWindow supplies the bitmap and opacity in one operation.
             // Form.Opacity uses a different Windows layering API and would disable it.
+        }
+
+        internal void SetImage(Bitmap replacement)
+        {
+            image = replacement;
+            // Windows retains the last submitted pixels until the next layered update.
+            ReleaseSurfaces();
         }
 
         internal void AttachTo(IntPtr window)
@@ -341,7 +393,11 @@ internal sealed class ArtworkOverlay : ApplicationContext
                 Surface next = previousSize;
                 if (next == null || next.Size != rect.Size)
                 {
-                    try { next = source.ScaleToCover(rect.Size); }
+                    try
+                    {
+                        if (source == null) source = new Surface(image.GetHbitmap(), image.Size);
+                        next = source.ScaleToCover(rect.Size);
+                    }
                     catch (Win32Exception) { return; } // Preserve the last committed frame and retry.
                 }
                 var destination = new Native.Point { X = rect.X, Y = rect.Y };
@@ -400,14 +456,17 @@ internal sealed class ArtworkOverlay : ApplicationContext
             base.WndProc(ref m);
         }
 
+        private void ReleaseSurfaces()
+        {
+            if (previousSize != null) previousSize.Dispose();
+            if (current != null) current.Dispose();
+            if (source != null) source.Dispose();
+            source = current = previousSize = null;
+        }
+
         protected override void Dispose(bool disposing)
         {
-            if (disposing)
-            {
-                if (previousSize != null) previousSize.Dispose();
-                if (current != null) current.Dispose();
-                source.Dispose();
-            }
+            if (disposing) ReleaseSurfaces();
             base.Dispose(disposing);
         }
     }
