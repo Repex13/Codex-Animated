@@ -15,7 +15,7 @@ internal sealed class WallpaperSettings
     private readonly string customPath;
 
     internal WallpaperSettings() : this(
-        Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "web", "assets", "artwork.jpg"),
+        LauncherTheme.DefaultWallpaperPath,
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Codex Animated")) { }
 
     internal WallpaperSettings(string bundledPath, string settingsDirectory)

@@ -13,16 +13,14 @@ internal sealed class ArtworkOverlay : ApplicationContext
     private const uint ForegroundEvent = 3;
     private const uint MoveSizeStart = 0x000A, MoveSizeEnd = 0x000B;
     private const uint LocationEvent = 0x800B;
-    private const int IdleInterval = 350, DragInterval = 16;
+    private const int IdleInterval = 350, DragInterval = 16, WaitingInterval = 1500;
     private readonly WallpaperSettings settings;
     private Bitmap source;
     private PreviewArtworkChild child;
     private ArtworkWindow artwork;
     private bool childUnavailable, refreshing;
     private readonly Timer timer = new Timer();
-    private readonly Stopwatch elapsed = Stopwatch.StartNew();
     private readonly NotifyIcon tray = new NotifyIcon();
-    private readonly Icon trayIcon;
     private readonly ContextMenuStrip menu = new ContextMenuStrip();
     private readonly ToolStripMenuItem toggle = new ToolStripMenuItem("Hide artwork");
     private readonly ToolStripMenuItem restore = new ToolStripMenuItem("Restore default wallpaper");
@@ -57,8 +55,7 @@ internal sealed class ArtworkOverlay : ApplicationContext
         menu.Items.Add(toggle);
         menu.Items.Add("Exit artwork", null, delegate { EndSession(); });
         tray.Text = "Codex Animated artwork";
-        trayIcon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
-        tray.Icon = trayIcon ?? SystemIcons.Application;
+        tray.Icon = SystemIcons.Application;
         tray.ContextMenuStrip = menu;
         tray.Visible = true;
 
@@ -134,6 +131,7 @@ internal sealed class ArtworkOverlay : ApplicationContext
         var cls = new StringBuilder(128);
         Native.GetClassName(window, cls, cls.Capacity);
         if (cls.ToString() != "Chrome_WidgetWin_1") return false;
+        if (IsCloaked(window)) return false;
         // Electron can remove the frame styles when the main window is already fullscreen.
         if ((Native.Styles(window, Native.Style) & (0x40000 | 0x20000 | 0x10000)) == 0)
         {
@@ -145,9 +143,11 @@ internal sealed class ArtworkOverlay : ApplicationContext
         uint pid;
         uint thread = Native.GetWindowThreadProcessId(window, out pid);
         if (thread == 0 || !OfficialProcess(pid)) return false;
+        ReleaseTarget();
         target = window;
         targetPid = pid;
         targetThread = thread;
+        timer.Interval = IdleInterval;
         SetCodexTransitions(enabled);
         locationHook = Native.SetWinEventHook(LocationEvent, LocationEvent, IntPtr.Zero, onEvent, pid, thread, 0);
         moveSizeHook = Native.SetWinEventHook(MoveSizeStart, MoveSizeEnd, IntPtr.Zero, onEvent, pid, thread, 0);
@@ -186,8 +186,10 @@ internal sealed class ArtworkOverlay : ApplicationContext
                 !Family.Equals(family.ToString(), StringComparison.OrdinalIgnoreCase)) return false;
             length = 32768;
             var image = new StringBuilder((int)length);
-            return Native.QueryFullProcessImageName(process, 0, image, ref length) &&
-                string.Equals(Path.GetFileName(image.ToString()), "ChatGPT.exe", StringComparison.OrdinalIgnoreCase);
+            if (!Native.QueryFullProcessImageName(process, 0, image, ref length)) return false;
+            string name = Path.GetFileName(image.ToString());
+            return string.Equals(name, "ChatGPT.exe", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(name, "Codex.exe", StringComparison.OrdinalIgnoreCase);
         }
         finally { Native.CloseHandle(process); }
     }
@@ -204,22 +206,22 @@ internal sealed class ArtworkOverlay : ApplicationContext
 
     private void UpdateArtwork()
     {
-        if (target == IntPtr.Zero)
+        if (target != IntPtr.Zero && !TargetStillExists()) ReleaseTarget();
+        IntPtr foreground = Native.GetForegroundWindow();
+        if (foreground != target) SelectWindow(foreground);
+
+        // Electron can hide a startup window or replace it while another app has focus.
+        // Keep a minimized window's preview until an actual replacement is visible.
+        if (target == IntPtr.Zero || !Native.IsWindowVisible(target) || Native.IsIconic(target) || IsCloaked(target))
         {
-            if (!SelectWindow(Native.GetForegroundWindow()))
-                Native.EnumWindows(delegate(IntPtr window, IntPtr param) { return !SelectWindow(window); }, IntPtr.Zero);
+            Native.EnumWindows(delegate(IntPtr window, IntPtr param) {
+                return window == target || Native.IsIconic(window) || !SelectWindow(window);
+            }, IntPtr.Zero);
             if (target == IntPtr.Zero)
             {
-                if (elapsed.ElapsedMilliseconds > 45000) EndSession();
+                timer.Interval = WaitingInterval;
                 return;
             }
-        }
-        uint pid;
-        uint thread = Native.GetWindowThreadProcessId(target, out pid);
-        if (pid != targetPid || thread != targetThread)
-        {
-            EndSession();
-            return;
         }
         if (!childUnavailable && (enabled || child != null) && TryChildArtwork()) return;
         if (!enabled)
@@ -239,8 +241,7 @@ internal sealed class ArtworkOverlay : ApplicationContext
             artwork.Conceal();
             return;
         }
-        int cloaked;
-        if (Native.DwmGetWindowAttribute(target, 14, out cloaked, sizeof(int)) == 0 && cloaked != 0)
+        if (IsCloaked(target))
         {
             artwork.Conceal();
             return;
@@ -251,6 +252,18 @@ internal sealed class ArtworkOverlay : ApplicationContext
             rect.Right <= 0 || rect.Bottom <= 0)
             return; // A transitioning HWND can briefly report no usable dimensions.
         artwork.Place(target, new Rectangle(point.X, point.Y, rect.Right, rect.Bottom));
+    }
+
+    private static bool IsCloaked(IntPtr window)
+    {
+        int value;
+        return Native.DwmGetWindowAttribute(window, 14, out value, sizeof(int)) == 0 && value != 0;
+    }
+
+    private bool TargetStillExists()
+    {
+        uint pid;
+        return Native.GetWindowThreadProcessId(target, out pid) == targetThread && pid == targetPid;
     }
 
     private bool TryChildArtwork()
@@ -275,13 +288,26 @@ internal sealed class ArtworkOverlay : ApplicationContext
         if (child != null) child.Dispose();
         child = null;
         childUnavailable = true;
-        uint pid;
-        if (Native.GetWindowThreadProcessId(target, out pid) != targetThread || pid != targetPid)
+        if (!TargetStillExists())
         {
-            EndSession();
+            ReleaseTarget();
             return true;
         }
         return false;
+    }
+
+    private void ReleaseTarget()
+    {
+        SetCodexTransitions(false);
+        if (moveSizeHook != IntPtr.Zero) Native.UnhookWinEvent(moveSizeHook);
+        if (locationHook != IntPtr.Zero) Native.UnhookWinEvent(locationHook);
+        moveSizeHook = locationHook = IntPtr.Zero;
+        if (child != null) { child.Dispose(); child = null; }
+        if (artwork != null) { artwork.Dispose(); artwork = null; }
+        target = IntPtr.Zero;
+        targetPid = targetThread = 0;
+        changedTransitions = childUnavailable = false;
+        timer.Interval = WaitingInterval;
     }
 
     private void EndSession()
@@ -299,17 +325,12 @@ internal sealed class ArtworkOverlay : ApplicationContext
         {
             disposed = true;
             shuttingDown = true;
-            SetCodexTransitions(false);
+            ReleaseTarget();
             timer.Dispose();
-            if (moveSizeHook != IntPtr.Zero) Native.UnhookWinEvent(moveSizeHook);
-            if (locationHook != IntPtr.Zero) Native.UnhookWinEvent(locationHook);
             if (foregroundHook != IntPtr.Zero) Native.UnhookWinEvent(foregroundHook);
             tray.Visible = false;
             tray.Dispose();
-            if (trayIcon != null) trayIcon.Dispose();
             menu.Dispose();
-            if (child != null) child.Dispose();
-            if (artwork != null) artwork.Dispose();
             source.Dispose();
         }
         base.Dispose(disposing);

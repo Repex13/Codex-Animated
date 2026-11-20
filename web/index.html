@@ -6,19 +6,14 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'; object-src 'none'">
   <title>Codex Animated</title>
   <link rel="stylesheet" href="style.css">
-  <script src="animation.js" defer></script>
+  <script defer src="animation.js"></script>
 </head>
 <body>
-  <main class="splash" aria-labelledby="title">
-    <div class="landscape" aria-hidden="true">
-      <img id="artwork" src="assets/artwork.jpg" alt="" decoding="async" fetchpriority="high">
-      <div class="aurora"></div>
-      <div class="shade"></div>
-    </div>
-    <footer class="caption">
-      <h1 id="title">Codex <em>Animated</em></h1>
-      <button type="button" id="skip" aria-keyshortcuts="Escape" title="Skip animation (Esc)">Skip <kbd>Esc</kbd></button>
-    </footer>
+  <main aria-labelledby="title">
+    <img id="artwork" src="assets/artwork.jpg" alt="" hidden>
+    <canvas id="screen" width="1080" height="720" aria-hidden="true"></canvas>
+    <h1 id="title">Codex <em>Animated</em></h1>
+    <button type="button" id="skip" aria-keyshortcuts="Escape">Skip <kbd>Esc</kbd></button>
   </main>
 </body>
 </html>
