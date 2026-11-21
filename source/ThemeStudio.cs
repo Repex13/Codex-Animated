@@ -1,439 +1,839 @@
 using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.Diagnostics;
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
+using System.Globalization;
 using System.IO;
+using System.Reflection;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Threading;
+using System.Web.Script.Serialization;
 using System.Windows.Forms;
+using Microsoft.Web.WebView2.Core;
+using Microsoft.Web.WebView2.WinForms;
 
-// Theme Studio: standalone configurator for the Animated launchers. It edits
-// the per-app settings the artwork helper and splash already read from
-// %LOCALAPPDATA%\<App> Animated — wallpaper.jpg, avatar.jpg, style.txt,
-// opacity.txt, skip-when-open.flag — and keeps a named theme library per app
-// under Themes\<name>. "Restart helper" applies changes live by launching
-// <App>Animated.exe --artwork; the launcher's takeover handshake swaps the
-// running helper so it reloads the new files.
-internal static class ThemeStudio
+[assembly: AssemblyTitle("Theme Studio")]
+[assembly: AssemblyProduct("Theme Studio")]
+[assembly: AssemblyDescription("Theme library and look editor for the Animated launchers")]
+[assembly: AssemblyVersion("2.0.0.0")]
+[assembly: AssemblyFileVersion("2.0.0.0")]
+
+internal static class ThemeStudioProgram
 {
+    private static readonly string[] bundleFiles = {
+        "Microsoft.Web.WebView2.Core.dll", "Microsoft.Web.WebView2.WinForms.dll", "WebView2Loader.dll",
+        "notices/LICENSE.txt", "notices/NOTICE.txt"
+    };
+    internal static string BundleDirectory { get; private set; }
+
     [STAThread]
-    private static int Main()
+    private static int Main(string[] args)
+    {
+        bool evalMode = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("ANIMATED_STUDIO_EVAL"));
+        bool first;
+        using (var mutex = new Mutex(true, @"Local\AnimatedLaunchers.ThemeStudio", out first))
+        {
+            if (!first)
+            {
+                if (!evalMode)
+                {
+                    IntPtr existing = FindWindow(null, "Theme Studio");
+                    if (existing != IntPtr.Zero)
+                    {
+                        if (IsIconic(existing)) ShowWindow(existing, 9);
+                        SetForegroundWindow(existing);
+                    }
+                }
+                return 0;
+            }
+            try
+            {
+                BundleDirectory = EmbeddedBundle.Prepare(typeof(ThemeStudioProgram).Assembly, ThemeLibrary.SharedRoot,
+                    "ThemeStudio.Bundle.", bundleFiles);
+                EmbeddedBundle.ResolveWebViewFrom(BundleDirectory);
+            }
+            catch (Exception ex)
+            {
+                if (!(ex is IOException || ex is UnauthorizedAccessException || ex is Win32Exception ||
+                    ex is System.Security.SecurityException)) throw;
+                MessageBox.Show("Windows could not prepare the Theme Studio files.\n\n" + ex.Message,
+                    "Theme Studio", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return 1;
+            }
+            return Run(args);
+        }
+    }
+
+    // Keep WebView2 references out of Main until the assembly resolver is installed.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static int Run(string[] args)
     {
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
-        Application.Run(new StudioForm());
+        using (var form = new StudioForm(args)) Application.Run(form);
         return 0;
     }
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern IntPtr FindWindow(string cls, string title);
+    [DllImport("user32.dll")] private static extern bool IsIconic(IntPtr window);
+    [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr window, int command);
+    [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr window);
 }
 
-internal sealed class AppChoice
+internal sealed class StudioApp
 {
-    internal readonly string Name, Product, HelperExe;
-    internal AppChoice(string name, string product, string helperExe)
-    {
-        Name = name; Product = product; HelperExe = helperExe;
-    }
-    internal string Root
-    {
-        get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), Product); }
-    }
-    internal string ThemesRoot { get { return Path.Combine(Root, "Themes"); } }
-    public override string ToString() { return Name; }
+    internal readonly string Id, Name, Product, Helper;
+    internal StudioApp(string id, string name) { Id = id; Name = name; Product = name + " Animated"; Helper = name + "Animated"; }
+    internal string Root { get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), Product); } }
 }
 
 internal sealed class StudioForm : Form
 {
-    private static readonly AppChoice[] Apps = {
-        new AppChoice("Devin", "Devin Animated", "DevinAnimated.exe"),
-        new AppChoice("Antigravity", "Antigravity Animated", "AntigravityAnimated.exe"),
-        new AppChoice("Codex", "Codex Animated", "CodexAnimated.exe")
-    };
-    private static readonly string[] Styles = { "natural", "soften", "dim", "aura" };
-    private static readonly int[] Percents = { 10, 15, 20, 25 };
+    private const string Origin = "https://studio.invalid/";
+    private const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
+    private static readonly StudioApp[] Apps = { new StudioApp("devin", "Devin"), new StudioApp("antigravity", "Antigravity"), new StudioApp("codex", "Codex") };
+    private static readonly string[] Commands = {
+        "state", "saveTheme", "applyTheme", "createTheme", "renameTheme", "deleteTheme", "replaceWallpaper",
+        "setAvatar", "clearAvatar", "setApp", "setAutostart", "startHelper", "playSplash" };
 
-    private readonly ComboBox target = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 130 };
-    private readonly PictureBox wallpaperPreview = new PictureBox { SizeMode = PictureBoxSizeMode.Zoom, BackColor = Color.FromArgb(16, 26, 36) };
-    private readonly PictureBox avatarPreview = new PictureBox { SizeMode = PictureBoxSizeMode.Zoom, BackColor = Color.FromArgb(16, 26, 36) };
-    private readonly ComboBox styleBox = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 150 };
-    private readonly ComboBox opacityBox = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 70 };
-    private readonly CheckBox skipBox = new CheckBox { AutoSize = true, ForeColor = Color.FromArgb(214, 226, 233) };
-    private readonly ListBox themes = new ListBox { IntegralHeight = false };
-    private readonly PictureBox themePreview = new PictureBox { SizeMode = PictureBoxSizeMode.Zoom, BackColor = Color.FromArgb(16, 26, 36) };
-    private readonly TextBox themeName = new TextBox();
-    private readonly Label status = new Label { AutoSize = true, ForeColor = Color.FromArgb(150, 170, 185) };
-    private readonly Label wallpaperState = new Label { AutoSize = true };
-    private readonly Label avatarState = new Label { AutoSize = true };
-    private bool loading;
+    private readonly WebView2 browser;
+    private readonly string[] args;
+    private readonly bool evalMode;
+    private readonly string devFolder;
+    private readonly string evalFile;
+    private readonly System.Windows.Forms.Timer evalTimer = new System.Windows.Forms.Timer();
+    private readonly JavaScriptSerializer json = new JavaScriptSerializer { MaxJsonLength = 64 * 1024 * 1024 };
+    private readonly Dictionary<string, byte[]> scaledCache = new Dictionary<string, byte[]>();
+    private readonly Dictionary<string, string[]> accentCache = new Dictionary<string, string[]>();
+    private readonly Dictionary<string, bool> brokenCache = new Dictionary<string, bool>();
+    private string previewKey;
+    private Bitmap previewSource;
+    private string evalStamp = "";
+    private bool closingSaved;
 
-    private AppChoice Current { get { return (AppChoice)target.SelectedItem; } }
-    private string WallpaperPath { get { return Path.Combine(Current.Root, "wallpaper.jpg"); } }
-    private string AvatarPath { get { return Path.Combine(Current.Root, "avatar.jpg"); } }
-    private string StylePath { get { return Path.Combine(Current.Root, "style.txt"); } }
-    private string OpacityPath { get { return Path.Combine(Current.Root, "opacity.txt"); } }
-    private string SkipPath { get { return Path.Combine(Current.Root, "skip-when-open.flag"); } }
-
-    internal StudioForm()
+    internal StudioForm(string[] args)
     {
+        this.args = args;
+        evalFile = Environment.GetEnvironmentVariable("ANIMATED_STUDIO_EVAL");
+        evalMode = !string.IsNullOrEmpty(evalFile);
+        devFolder = Environment.GetEnvironmentVariable("ANIMATED_STUDIO_DEV");
         Text = "Theme Studio";
-        ClientSize = new Size(640, 560);
-        StartPosition = FormStartPosition.CenterScreen;
-        BackColor = Color.FromArgb(10, 24, 33);
-        ForeColor = Color.FromArgb(214, 226, 233);
-        Font = new Font("Segoe UI", 9f);
-        MinimumSize = new Size(660, 600);
-
-        var targetLabel = LabelAt("Target app", 16, 16);
-        target.Location = new Point(90, 12);
-        foreach (var app in Apps) target.Items.Add(app);
-        target.SelectedIndex = 0;
-        target.SelectedIndexChanged += delegate { LoadAll(); };
-
-        int top = 52;
-        wallpaperPreview.SetBounds(16, top, 420, 210);
-        wallpaperPreview.BorderStyle = BorderStyle.FixedSingle;
-        var pickWallpaper = ButtonAt("Choose wallpaper…", 16, top + 218, delegate { ChooseImage(WallpaperPath); });
-        var resetWallpaper = ButtonAt("Restore bundled", 164, top + 218, delegate {
-            TryDelete(WallpaperPath); LoadAll(); Note("Wallpaper reset to the bundled artwork — restart the helper to apply.");
-        });
-        wallpaperState.Location = new Point(16, top + 248);
-        wallpaperState.ForeColor = ForeColor;
-
-        avatarPreview.SetBounds(468, top, 96, 96);
-        avatarPreview.BorderStyle = BorderStyle.FixedSingle;
-        LabelAt("Splash avatar", 468, top + 104).AutoSize = true;
-        var pickAvatar = ButtonAt("Choose…", 468, top + 128, delegate { ChooseImage(AvatarPath); });
-        pickAvatar.Width = 96;
-        var resetAvatar = ButtonAt("Clear", 468, top + 160, delegate {
-            TryDelete(AvatarPath); LoadAll(); Note("Avatar cleared — the wallpaper is used in the radar instead.");
-        });
-        resetAvatar.Width = 96;
-        avatarState.Location = new Point(468, top + 192);
-        avatarState.ForeColor = ForeColor;
-        avatarState.MaximumSize = new Size(160, 0);
-
-        LabelAt("Artwork style", 468, top + 200);
-        styleBox.Location = new Point(468, top + 220);
-        foreach (string style in Styles) styleBox.Items.Add(style);
-        styleBox.SelectedIndexChanged += delegate {
-            if (loading) return;
-            WriteText(StylePath, (string)styleBox.SelectedItem);
-            Note("Style saved — restart the helper to apply.");
-        };
-        LabelAt("Opacity", 16, top + 274);
-        opacityBox.Location = new Point(16, top + 294);
-        foreach (int percent in Percents) opacityBox.Items.Add(percent + "%");
-        opacityBox.SelectedIndexChanged += delegate {
-            if (loading) return;
-            byte alpha = (byte)Math.Round(255 * Percents[opacityBox.SelectedIndex] / 100.0);
-            WriteText(OpacityPath, alpha.ToString());
-            Note("Opacity saved — restart the helper to apply.");
-        };
-        skipBox.Text = "Skip the splash when the app is already open";
-        skipBox.Location = new Point(120, top + 296);
-        skipBox.CheckedChanged += delegate {
-            if (loading) return;
-            SetFlag(SkipPath, skipBox.Checked);
-            Note("Splash skip preference saved.");
-        };
-        var restart = ButtonAt("Restart artwork helper", 16, top + 330, delegate { RestartHelper(); });
-        restart.Width = 200;
-        restart.BackColor = Color.FromArgb(34, 70, 92);
-        restart.FlatStyle = FlatStyle.Flat;
-        restart.ForeColor = Color.FromArgb(230, 240, 246);
-
-        int themesTop = top + 366;
-        LabelAt("Themes (per target app)", 16, themesTop);
-        themes.SetBounds(16, themesTop + 20, 200, 100);
-        themes.SelectedIndexChanged += delegate { ShowThemePreview(); };
-        themePreview.SetBounds(228, themesTop + 20, 280, 100);
-        themePreview.BorderStyle = BorderStyle.FixedSingle;
-        themeName.SetBounds(520, themesTop + 20, 106, 23);
-        var saveTheme = ButtonAt("Save current", 520, themesTop + 46, delegate { SaveTheme(); });
-        saveTheme.Width = 106;
-        var applyTheme = ButtonAt("Apply", 520, themesTop + 76, delegate { ApplyTheme(); });
-        applyTheme.Width = 106;
-        var deleteTheme = ButtonAt("Delete", 520, themesTop + 106, delegate { DeleteTheme(); });
-        deleteTheme.Width = 106;
-
-        status.Location = new Point(16, ClientSize.Height - 26);
-        status.MaximumSize = new Size(ClientSize.Width - 32, 0);
-
-        Controls.AddRange(new Control[] {
-            targetLabel, target, wallpaperPreview, pickWallpaper, resetWallpaper, wallpaperState,
-            avatarPreview, pickAvatar, resetAvatar, avatarState, styleBox, opacityBox, skipBox, restart,
-            themes, themePreview, themeName, saveTheme, applyTheme, deleteTheme, status
-        });
-        LoadAll();
+        AutoScaleMode = AutoScaleMode.None;
+        BackColor = Color.FromArgb(0x0F, 0x10, 0x14);
+        StartPosition = FormStartPosition.Manual;
+        try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch (ArgumentException) { }
+        ClientSize = new Size(1240, 800);
+        MinimumSize = SizeFromClientSize(new Size(1040, 660));
+        PlaceWindow();
+        browser = new WebView2 { Dock = DockStyle.Fill, DefaultBackgroundColor = BackColor, AllowExternalDrop = false };
+        Controls.Add(browser);
+        Shown += Start;
+        evalTimer.Interval = 150;
+        evalTimer.Tick += delegate { PollEval(); };
     }
 
-    private Label LabelAt(string text, int x, int y)
+    protected override bool ShowWithoutActivation { get { return evalMode; } }
+
+    protected override void OnHandleCreated(EventArgs e)
     {
-        var label = new Label { Text = text, Location = new Point(x, y), AutoSize = true, ForeColor = ForeColor };
-        Controls.Add(label);
-        return label;
+        base.OnHandleCreated(e);
+        int dark = 1, caption = 0x14100F, text = 0xF4EEEC; // COLORREF is BGR
+        DwmSetWindowAttribute(Handle, 20, ref dark, 4);
+        DwmSetWindowAttribute(Handle, 35, ref caption, 4);
+        DwmSetWindowAttribute(Handle, 36, ref text, 4);
     }
 
-    private Button ButtonAt(string text, int x, int y, EventHandler action)
-    {
-        var button = new Button { Text = text, Location = new Point(x, y), Width = 140, Height = 26 };
-        button.FlatStyle = FlatStyle.Flat;
-        button.FlatAppearance.BorderColor = Color.FromArgb(60, 90, 110);
-        button.BackColor = Color.FromArgb(22, 44, 58);
-        button.ForeColor = ForeColor;
-        button.Click += action;
-        return button;
-    }
+    private static string StudioIni { get { return Path.Combine(ThemeLibrary.SharedRoot, "studio.ini"); } }
 
-    private void Note(string message) { status.Text = message; }
-
-    private void LoadAll()
+    private void PlaceWindow()
     {
-        loading = true;
-        try
+        Rectangle saved;
+        string value = IniFile.Load(StudioIni).Get("window");
+        if (value != null && TryParseRect(value, out saved))
         {
-            LoadPreview(wallpaperPreview, WallpaperPath);
-            wallpaperState.Text = File.Exists(WallpaperPath) ? "Custom wallpaper" : "Bundled artwork";
-            LoadPreview(avatarPreview, AvatarPath);
-            avatarState.Text = File.Exists(AvatarPath) ? "Custom" : "Wallpaper fallback";
-            string style = "natural";
-            try { if (File.Exists(StylePath)) style = File.ReadAllText(StylePath).Trim(); } catch (IOException) { }
-            int styleIndex = Array.IndexOf(Styles, style);
-            styleBox.SelectedIndex = styleIndex < 0 ? 0 : styleIndex;
-            byte alpha = 38;
+            var center = new Point(saved.Left + saved.Width / 2, saved.Top + saved.Height / 2);
+            foreach (Screen screen in Screen.AllScreens)
+                if (screen.WorkingArea.Contains(center)) { Bounds = saved; return; }
+        }
+        Rectangle area = Screen.FromPoint(Cursor.Position).WorkingArea;
+        Location = new Point(area.Left + Math.Max(0, (area.Width - Width) / 2), area.Top + Math.Max(0, (area.Height - Height) / 2));
+    }
+
+    private static bool TryParseRect(string text, out Rectangle rect)
+    {
+        rect = Rectangle.Empty;
+        string[] parts = text.Split(',');
+        int[] n = new int[4];
+        if (parts.Length != 4) return false;
+        for (int i = 0; i < 4; i++)
+            if (!int.TryParse(parts[i].Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out n[i])) return false;
+        if (n[2] < 400 || n[3] < 300) return false;
+        rect = new Rectangle(n[0], n[1], n[2], n[3]);
+        return true;
+    }
+
+    protected override void OnFormClosing(FormClosingEventArgs e)
+    {
+        if (!closingSaved)
+        {
+            closingSaved = true;
             try
             {
-                if (File.Exists(OpacityPath)) byte.TryParse(File.ReadAllText(OpacityPath).Trim(), out alpha);
+                Rectangle bounds = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
+                IniFile ini = IniFile.Load(StudioIni);
+                ini.Set("window", string.Format(CultureInfo.InvariantCulture, "{0},{1},{2},{3}", bounds.X, bounds.Y, bounds.Width, bounds.Height));
+                ini.Save(StudioIni);
             }
             catch (IOException) { }
-            int best = 1;
-            for (int i = 0; i < Percents.Length; i++)
-                if (Math.Abs(Percents[i] * 255 / 100 - alpha) < Math.Abs(Percents[best] * 255 / 100 - alpha)) best = i;
-            opacityBox.SelectedIndex = best;
-            skipBox.Checked = File.Exists(SkipPath);
-            RefreshThemes();
-            Note(Current.Root);
+            catch (UnauthorizedAccessException) { }
         }
-        finally { loading = false; }
+        base.OnFormClosing(e);
     }
 
-    private static void LoadPreview(PictureBox box, string path)
+    protected override void Dispose(bool disposing)
     {
-        Image previous = box.Image;
-        box.Image = null;
-        if (previous != null) previous.Dispose();
-        if (path == null || !File.Exists(path)) return;
+        if (disposing)
+        {
+            evalTimer.Dispose();
+            if (previewSource != null) previewSource.Dispose();
+        }
+        base.Dispose(disposing);
+    }
+
+    private async void Start(object sender, EventArgs e)
+    {
         try
         {
-            using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
-            using (var image = Image.FromStream(stream))
-                box.Image = new Bitmap(image);
+            CoreWebView2Environment.SetLoaderDllFolderPath(ThemeStudioProgram.BundleDirectory);
+            string profile = Path.Combine(ThemeLibrary.SharedRoot, "WebView2");
+            var options = new CoreWebView2EnvironmentOptions { AdditionalBrowserArguments = "--disable-background-networking --disable-sync" };
+            var environment = await CoreWebView2Environment.CreateAsync(null, profile, options);
+            await browser.EnsureCoreWebView2Async(environment);
+            CoreWebView2 core = browser.CoreWebView2;
+            core.Settings.AreDevToolsEnabled = !string.IsNullOrEmpty(devFolder);
+            core.Settings.AreHostObjectsAllowed = false;
+            core.Settings.AreDefaultContextMenusEnabled = false;
+            core.Settings.AreBrowserAcceleratorKeysEnabled = !string.IsNullOrEmpty(devFolder);
+            core.Settings.AreDefaultScriptDialogsEnabled = false;
+            core.Settings.IsStatusBarEnabled = false;
+            core.Settings.IsZoomControlEnabled = false;
+            core.Settings.IsGeneralAutofillEnabled = false;
+            core.Settings.IsPasswordAutosaveEnabled = false;
+            core.NewWindowRequested += (s, a) => a.Handled = true;
+            core.PermissionRequested += (s, a) => a.State = CoreWebView2PermissionState.Deny;
+            core.DownloadStarting += (s, a) => a.Cancel = true;
+            core.LaunchingExternalUriScheme += (s, a) => a.Cancel = true;
+            core.NavigationStarting += (s, a) => a.Cancel = !a.Uri.StartsWith(Origin + "index.html", StringComparison.Ordinal);
+            core.FrameNavigationStarting += (s, a) => a.Cancel = !a.Uri.StartsWith(Origin + "splash/", StringComparison.Ordinal);
+            core.WebMessageReceived += OnMessage;
+            core.AddWebResourceRequestedFilter("*", CoreWebView2WebResourceContext.All, CoreWebView2WebResourceRequestSourceKinds.All);
+            core.WebResourceRequested += (s, a) => Serve(environment, a);
+            string hash = "";
+            for (int i = 0; i + 1 < args.Length; i++)
+                if (args[i] == "--open") hash = "#" + args[i + 1].Replace(" ", "%20");
+            core.Navigate(Origin + "index.html" + hash);
+            if (evalMode) evalTimer.Start();
         }
-        catch (Exception) { }
+        catch (Exception error)
+        {
+            MessageBox.Show("Theme Studio could not start its window.\n\n" + error.GetBaseException().Message +
+                "\n\nCheck that the Microsoft Edge WebView2 Runtime is installed.", "Theme Studio", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            Close();
+        }
     }
 
-    private void ChooseImage(string destination)
+    // ---- resources ----
+
+    private static Dictionary<string, string> Query(Uri uri)
+    {
+        var map = new Dictionary<string, string>(StringComparer.Ordinal);
+        string query = uri.Query;
+        if (query.StartsWith("?", StringComparison.Ordinal)) query = query.Substring(1);
+        foreach (string pair in query.Split(new[] { '&' }, StringSplitOptions.RemoveEmptyEntries))
+        {
+            int eq = pair.IndexOf('=');
+            string key = Uri.UnescapeDataString(eq < 0 ? pair : pair.Substring(0, eq));
+            map[key] = eq < 0 ? "" : Uri.UnescapeDataString(pair.Substring(eq + 1));
+        }
+        return map;
+    }
+
+    private static int Number(Dictionary<string, string> q, string key, int fallback, int min, int max)
+    {
+        string text;
+        int value;
+        if (!q.TryGetValue(key, out text) || !int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out value)) return fallback;
+        return Math.Max(min, Math.Min(max, value));
+    }
+
+    private void Serve(CoreWebView2Environment environment, CoreWebView2WebResourceRequestedEventArgs a)
+    {
+        string uriText = a.Request.Uri;
+        if (!uriText.StartsWith(Origin, StringComparison.Ordinal)) return;
+        byte[] body = null;
+        string type = "text/plain; charset=utf-8";
+        int status = 403;
+        try
+        {
+            if (a.Request.Method == "GET")
+            {
+                var uri = new Uri(uriText);
+                string[] segments = uri.AbsolutePath.TrimStart('/').Split('/');
+                for (int i = 0; i < segments.Length; i++) segments[i] = Uri.UnescapeDataString(segments[i]);
+                status = 404;
+                body = Route(segments, Query(uri), ref type);
+                if (body != null) status = 200;
+            }
+        }
+        catch (Exception error)
+        {
+            if (!(error is IOException || error is InvalidDataException || error is UnauthorizedAccessException ||
+                error is ArgumentException || error is ExternalException || error is OutOfMemoryException || error is UriFormatException)) throw;
+            body = null;
+            status = 404;
+        }
+        string headers = "Content-Type: " + type + "\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff";
+        a.Response = environment.CreateWebResourceResponse(body == null ? null : new MemoryStream(body, false), status,
+            status == 200 ? "OK" : status == 404 ? "Not Found" : "Forbidden", headers);
+    }
+
+    private byte[] Route(string[] s, Dictionary<string, string> q, ref string type)
+    {
+        if (s.Length == 1 && (s[0] == "index.html" || s[0] == "studio.css" || s[0] == "studio.js"))
+        {
+            type = s[0].EndsWith(".html") ? "text/html; charset=utf-8" : s[0].EndsWith(".css") ? "text/css; charset=utf-8" : "text/javascript; charset=utf-8";
+            return PageFile(s[0]);
+        }
+        if (s.Length == 2 && s[0] == "img")
+        {
+            string theme;
+            if (!q.TryGetValue("theme", out theme)) return null;
+            theme = ThemeLibrary.Exact(theme);
+            if (theme == null) return null;
+            type = "image/jpeg";
+            if (s[1] == "wallpaper") return ScaledWallpaper(theme, Number(q, "w", 160, 16, 2400));
+            if (s[1] == "avatar")
+            {
+                string avatar = Path.Combine(ThemeLibrary.Folder(theme), "avatar.jpg");
+                return File.Exists(avatar) ? ImageCodec.ReadBytes(avatar) : null;
+            }
+            if (s[1] == "look") return LookImage(theme, q);
+            return null;
+        }
+        if (s.Length >= 4 && s[0] == "splash") return SplashFile(s, q, ref type);
+        return null;
+    }
+
+    private byte[] PageFile(string name)
+    {
+        if (!string.IsNullOrEmpty(devFolder)) return File.ReadAllBytes(Path.Combine(devFolder, name));
+        return Embedded("studio/" + name);
+    }
+
+    private static byte[] Embedded(string resource)
+    {
+        using (Stream stream = typeof(StudioForm).Assembly.GetManifestResourceStream(resource))
+        {
+            if (stream == null) return null;
+            var memory = new MemoryStream();
+            stream.CopyTo(memory);
+            return memory.ToArray();
+        }
+    }
+
+    private static byte[] EncodeJpeg(Bitmap bitmap, long quality)
+    {
+        using (var output = new MemoryStream())
+        using (var options = new EncoderParameters(1))
+        {
+            options.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, quality);
+            ImageCodecInfo codec = Array.Find(ImageCodecInfo.GetImageEncoders(), c => c.FormatID == ImageFormat.Jpeg.Guid);
+            bitmap.Save(output, codec, options);
+            return output.ToArray();
+        }
+    }
+
+    private static Bitmap Scale(Bitmap src, int width, int height)
+    {
+        var result = new Bitmap(width, height, PixelFormat.Format24bppRgb);
+        using (var g = Graphics.FromImage(result))
+        using (var attrs = new ImageAttributes())
+        {
+            attrs.SetWrapMode(WrapMode.TileFlipXY);
+            g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            g.PixelOffsetMode = PixelOffsetMode.Half;
+            g.DrawImage(src, new Rectangle(0, 0, width, height), 0, 0, src.Width, src.Height, GraphicsUnit.Pixel, attrs);
+        }
+        return result;
+    }
+
+    private byte[] ScaledWallpaper(string theme, int width)
+    {
+        string key = theme + "|" + width + "|" + ThemeLibrary.Stamp(theme);
+        byte[] cached;
+        if (scaledCache.TryGetValue(key, out cached)) return cached;
+        using (Bitmap source = ImageCodec.DecodeJpeg(ImageCodec.ReadBytes(Path.Combine(ThemeLibrary.Folder(theme), "wallpaper.jpg"))))
+        using (Bitmap small = width >= source.Width ? null : Scale(source, width, Math.Max(1, (int)Math.Round(source.Height * (double)width / source.Width))))
+        {
+            cached = EncodeJpeg(small ?? source, 85);
+        }
+        if (scaledCache.Count > 80) scaledCache.Clear();
+        scaledCache[key] = cached;
+        return cached;
+    }
+
+    private byte[] LookImage(string theme, Dictionary<string, string> q)
+    {
+        string key = theme + "|" + ThemeLibrary.Stamp(theme);
+        if (previewKey != key)
+        {
+            using (Bitmap source = ImageCodec.DecodeJpeg(ImageCodec.ReadBytes(Path.Combine(ThemeLibrary.Folder(theme), "wallpaper.jpg"))))
+            {
+                double zoom = Math.Min(1.0, 960.0 / Math.Max(source.Width, source.Height));
+                Bitmap fresh = zoom >= 1.0 ? new Bitmap(source) : Scale(source, Math.Max(1, (int)Math.Round(source.Width * zoom)), Math.Max(1, (int)Math.Round(source.Height * zoom)));
+                if (previewSource != null) previewSource.Dispose();
+                previewSource = fresh;
+                previewKey = key;
+            }
+        }
+        var look = new Look { Blur = Number(q, "blur", 0, 0, 100), Dim = Number(q, "dim", 0, 0, 80), Tint = Number(q, "tint", 0, 0, 100) };
+        Color tint;
+        string tintText;
+        if (q.TryGetValue("tintColor", out tintText) && SplashText.TryParseColor(tintText, out tint)) look.TintColor = tint;
+        Bitmap rendered = ArtworkLook.Render(previewSource, look);
+        try { return EncodeJpeg(rendered, 88); }
+        finally { if (!object.ReferenceEquals(rendered, previewSource)) rendered.Dispose(); }
+    }
+
+    private byte[] SplashFile(string[] s, Dictionary<string, string> q, ref string type)
+    {
+        string theme = ThemeLibrary.Exact(s[1]);
+        if (theme == null) return null;
+        string folder = ThemeLibrary.Folder(theme);
+        string file = string.Join("/", s, 3, s.Length - 3);
+        switch (file)
+        {
+            case "index.html":
+            {
+                string id;
+                q.TryGetValue("app", out id);
+                StudioApp app = FindApp(id) ?? Apps[0];
+                byte[] wallpaper = ImageCodec.ReadBytes(Path.Combine(folder, "wallpaper.jpg"));
+                Size size;
+                using (var image = Image.FromStream(new MemoryStream(wallpaper, false), false, false)) size = image.Size;
+                SplashContent content = SplashContent.Load(folder, app.Name, size);
+                type = "text/html; charset=utf-8";
+                return SplashPage.RenderIndex(Embedded("web/index.html"), content, app.Name);
+            }
+            case "style.css": type = "text/css; charset=utf-8"; return Embedded("web/style.css");
+            case "animation.js": type = "text/javascript; charset=utf-8"; return Embedded("web/animation.js");
+            case "assets/contours.js": type = "text/javascript; charset=utf-8"; return Embedded("web/assets/contours.js");
+            case "assets/artwork.jpg":
+                type = "image/jpeg";
+                return ImageCodec.ReadBytes(Path.Combine(folder, "wallpaper.jpg"));
+            case "assets/avatar.jpg":
+            {
+                type = "image/jpeg";
+                string avatar = Path.Combine(folder, "avatar.jpg");
+                return ImageCodec.ReadBytes(File.Exists(avatar) ? avatar : Path.Combine(folder, "wallpaper.jpg"));
+            }
+        }
+        return null;
+    }
+
+    // ---- bridge ----
+
+    private static StudioApp FindApp(string id)
+    {
+        foreach (StudioApp app in Apps) if (string.Equals(app.Id, id, StringComparison.Ordinal)) return app;
+        return null;
+    }
+
+    private static IEnumerable<string> AppRoots()
+    {
+        foreach (StudioApp app in Apps) yield return app.Root;
+    }
+
+    private void OnMessage(object sender, CoreWebView2WebMessageReceivedEventArgs a)
+    {
+        // The embedded splash frame also posts "complete"; only the studio page itself may command the host.
+        if (!a.Source.StartsWith(Origin + "index.html", StringComparison.Ordinal)) return;
+        Dictionary<string, object> message = null;
+        try { message = json.DeserializeObject(a.WebMessageAsJson) as Dictionary<string, object>; }
+        catch (ArgumentException) { return; }
+        catch (InvalidOperationException) { return; }
+        if (message == null) return;
+        object cmdValue;
+        if (!message.TryGetValue("cmd", out cmdValue) || !(cmdValue is string) || Array.IndexOf(Commands, (string)cmdValue) < 0) return;
+        object id;
+        message.TryGetValue("id", out id);
+        var reply = new Dictionary<string, object>();
+        reply["id"] = id;
+        try
+        {
+            reply["data"] = Execute((string)cmdValue, message);
+            reply["ok"] = true;
+        }
+        catch (Exception error)
+        {
+            reply["ok"] = false;
+            reply["error"] = Friendly(error);
+        }
+        browser.CoreWebView2.PostWebMessageAsJson(json.Serialize(reply));
+    }
+
+    private static string Friendly(Exception error)
+    {
+        if (error is InvalidDataException) return "Couldn't read that image. Use a JPEG, PNG or BMP under 64 megapixels.";
+        if (error is ArgumentException || error is IOException || error is FileNotFoundException || error is UnauthorizedAccessException ||
+            error is InvalidOperationException || error is Win32Exception || error is ExternalException || error is NotSupportedException)
+            return error.Message;
+        return "Something went wrong: " + error.Message;
+    }
+
+    private static string Str(Dictionary<string, object> d, string key)
+    {
+        object v;
+        return d.TryGetValue(key, out v) && v != null ? Convert.ToString(v, CultureInfo.InvariantCulture) : null;
+    }
+
+    private static bool Flag(Dictionary<string, object> d, string key)
+    {
+        object v;
+        return d.TryGetValue(key, out v) && v is bool && (bool)v;
+    }
+
+    private static Dictionary<string, object> Obj(Dictionary<string, object> d, string key)
+    {
+        object v;
+        return d.TryGetValue(key, out v) ? v as Dictionary<string, object> : null;
+    }
+
+    private static int Int(Dictionary<string, object> d, string key, int fallback)
+    {
+        object v;
+        if (!d.TryGetValue(key, out v) || v == null) return fallback;
+        try { return Convert.ToInt32(v, CultureInfo.InvariantCulture); } catch (FormatException) { return fallback; } catch (InvalidCastException) { return fallback; }
+    }
+
+    private string ExistingTheme(Dictionary<string, object> m)
+    {
+        string name = ThemeLibrary.Exact(Str(m, "name"));
+        if (name == null) throw new FileNotFoundException("That theme no longer exists. Pick another one.");
+        return name;
+    }
+
+    private object Execute(string cmd, Dictionary<string, object> m)
+    {
+        switch (cmd)
+        {
+            case "state": return State();
+            case "saveTheme": return SaveTheme(m);
+            case "applyTheme":
+            {
+                string name = ExistingTheme(m);
+                string target = Str(m, "app");
+                if (target == "all") foreach (StudioApp app in Apps) ThemeLibrary.Apply(name, app.Root);
+                else
+                {
+                    StudioApp app = FindApp(target);
+                    if (app == null) throw new ArgumentException("Unknown app.");
+                    ThemeLibrary.Apply(name, app.Root);
+                }
+                return AppList();
+            }
+            case "createTheme":
+            {
+                string path = TestPath(m) ?? PickImage("Choose a wallpaper image");
+                if (path == null) return new Dictionary<string, object> { { "cancelled", true } };
+                string created = ThemeLibrary.Create(path);
+                Dictionary<string, object> state = State();
+                state["created"] = created;
+                return state;
+            }
+            case "renameTheme":
+            {
+                string name = ExistingTheme(m);
+                string renamed = ThemeLibrary.Rename(name, Str(m, "newName"), AppRoots());
+                Dictionary<string, object> state = State();
+                state["renamed"] = renamed;
+                return state;
+            }
+            case "deleteTheme":
+            {
+                string name = ExistingTheme(m);
+                Microsoft.VisualBasic.FileIO.FileSystem.DeleteDirectory(ThemeLibrary.Folder(name),
+                    Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs, Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
+                ThemeLibrary.ClearReferences(name, AppRoots());
+                return State();
+            }
+            case "replaceWallpaper":
+            {
+                string name = ExistingTheme(m);
+                string path = TestPath(m) ?? PickImage("Choose a wallpaper image");
+                if (path == null) return new Dictionary<string, object> { { "cancelled", true } };
+                byte[] jpeg = ImageCodec.ToJpeg(path);
+                using (ImageCodec.DecodeJpeg(jpeg)) { }
+                string target = Path.Combine(ThemeLibrary.Folder(name), "wallpaper.jpg");
+                ThemeLibrary.WithLock(ThemeLibrary.Folder(name), delegate { ImageCodec.SaveAtomic(target, jpeg); });
+                ReapplyTo(name);
+                return State();
+            }
+            case "setAvatar":
+            {
+                string name = ExistingTheme(m);
+                string path = TestPath(m) ?? PickImage("Choose an avatar image");
+                if (path == null) return new Dictionary<string, object> { { "cancelled", true } };
+                byte[] jpeg = ImageCodec.ToJpeg(path);
+                using (ImageCodec.DecodeJpeg(jpeg)) { }
+                string target = Path.Combine(ThemeLibrary.Folder(name), "avatar.jpg");
+                ThemeLibrary.WithLock(ThemeLibrary.Folder(name), delegate { ImageCodec.SaveAtomic(target, jpeg); });
+                ReapplyTo(name);
+                return State();
+            }
+            case "clearAvatar":
+            {
+                string name = ExistingTheme(m);
+                string target = Path.Combine(ThemeLibrary.Folder(name), "avatar.jpg");
+                ThemeLibrary.WithLock(ThemeLibrary.Folder(name), delegate { File.Delete(target); });
+                ReapplyTo(name);
+                return State();
+            }
+            case "setApp":
+            {
+                StudioApp app = FindApp(Str(m, "app"));
+                if (app == null) throw new ArgumentException("Unknown app.");
+                AppProfile profile = AppProfile.LoadStrict(app.Root);
+                if (m.ContainsKey("splash")) profile.SplashOnStart = Flag(m, "splash");
+                if (m.ContainsKey("speed")) profile.Speed = Int(m, "speed", 1) == 2 ? 2 : 1;
+                profile.Save();
+                return AppList();
+            }
+            case "setAutostart":
+            {
+                StudioApp app = FindApp(Str(m, "app"));
+                if (app == null) throw new ArgumentException("Unknown app.");
+                using (var key = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(RunKey))
+                {
+                    if (Flag(m, "on"))
+                        key.SetValue(app.Helper, "\"" + Path.Combine(StudioFolder(), app.Helper + ".exe") + "\" --artwork");
+                    else key.DeleteValue(app.Helper, false);
+                }
+                return AppList();
+            }
+            case "startHelper":
+            {
+                StudioApp app = FindApp(Str(m, "app"));
+                if (app == null) throw new ArgumentException("Unknown app.");
+                string exe = Path.Combine(StudioFolder(), app.Helper + ".exe");
+                if (!File.Exists(exe)) throw new FileNotFoundException(app.Helper + ".exe is not next to Theme Studio, so the helper can't be started.");
+                using (Process.Start(new ProcessStartInfo(exe, "--artwork") { UseShellExecute = false })) { }
+                for (int i = 0; i < 15 && !HelperRunning(app); i++) Thread.Sleep(100);
+                return AppList();
+            }
+            case "playSplash":
+            {
+                string name = ExistingTheme(m);
+                StudioApp app = FindApp(Str(m, "app"));
+                if (app == null) throw new ArgumentException("Unknown app.");
+                string exe = Path.Combine(StudioFolder(), app.Helper + ".exe");
+                string arguments = "--preview \"" + ThemeLibrary.Folder(name) + "\" " + Handle64();
+                if (evalMode && Flag(m, "dryRun"))
+                    return new Dictionary<string, object> { { "exe", exe }, { "args", arguments }, { "hwnd", Handle64() } };
+                if (!File.Exists(exe)) throw new FileNotFoundException(app.Helper + ".exe is not next to Theme Studio, so the animation can't be played.");
+                using (Process.Start(new ProcessStartInfo(exe, arguments) { UseShellExecute = false })) { }
+                return new Dictionary<string, object>();
+            }
+        }
+        throw new ArgumentException("Unknown command.");
+    }
+
+    private string Handle64() { return Handle.ToInt64().ToString(CultureInfo.InvariantCulture); }
+
+    private static string StudioFolder() { return Path.GetDirectoryName(Application.ExecutablePath); }
+
+    private string TestPath(Dictionary<string, object> m)
+    {
+        // Test-only: the native file dialog cannot be driven without input.
+        string path = Str(m, "path");
+        return evalMode && !string.IsNullOrEmpty(path) ? path : null;
+    }
+
+    private string PickImage(string title)
     {
         using (var dialog = new OpenFileDialog {
-            Title = "Choose an image",
-            Filter = "Images (*.jpg, *.jpeg, *.png, *.bmp)|*.jpg;*.jpeg;*.png;*.bmp",
-            RestoreDirectory = true
+            Title = title, RestoreDirectory = true,
+            Filter = "Images (*.jpg, *.jpeg, *.png, *.bmp)|*.jpg;*.jpeg;*.png;*.bmp"
         })
+            return dialog.ShowDialog(this) == DialogResult.OK ? dialog.FileName : null;
+    }
+
+    private void ReapplyTo(string name)
+    {
+        foreach (string root in AppRoots())
+            if (ThemeLibrary.UsesTheme(root, name)) ThemeLibrary.Apply(name, root);
+    }
+
+    private object SaveTheme(Dictionary<string, object> m)
+    {
+        string name = ExistingTheme(m);
+        Dictionary<string, object> l = Obj(m, "look") ?? new Dictionary<string, object>();
+        Dictionary<string, object> t = Obj(m, "text") ?? new Dictionary<string, object>();
+        var ini = new IniFile();
+        foreach (string key in new[] { "opacity", "blur", "dim", "tint", "tintColor", "focusX", "focusY" })
+            if (Str(l, key) != null) ini.Set(key, Str(l, key));
+        foreach (string key in new[] { "title", "subtitle", "accent" })
+            if (Str(t, key) != null) ini.Set(key, Str(t, key));
+        object logs;
+        if (t.TryGetValue("logs", out logs) && logs is System.Collections.IEnumerable && !(logs is string))
         {
-            if (dialog.ShowDialog() != DialogResult.OK) return;
-            try
+            var lines = new List<string>();
+            foreach (object line in (System.Collections.IEnumerable)logs) lines.Add(Convert.ToString(line, CultureInfo.InvariantCulture));
+            ini.Set("logs", string.Join("|", lines.ToArray()));
+        }
+        SplashText stored;
+        Look clamped = ThemeLibrary.Save(name, Look.Read(ini), SplashText.Read(ini), AppRoots(), out stored);
+        return new Dictionary<string, object> { { "look", LookData(clamped) }, { "text", TextData(stored) } };
+    }
+
+    private static Dictionary<string, object> LookData(Look look)
+    {
+        return new Dictionary<string, object> {
+            { "opacity", look.Opacity }, { "blur", look.Blur }, { "dim", look.Dim }, { "tint", look.Tint },
+            { "tintColor", string.Format(CultureInfo.InvariantCulture, "#{0:X2}{1:X2}{2:X2}", look.TintColor.R, look.TintColor.G, look.TintColor.B) },
+            { "focusX", look.FocusX }, { "focusY", look.FocusY }
+        };
+    }
+
+    private static Dictionary<string, object> TextData(SplashText text)
+    {
+        return new Dictionary<string, object> {
+            { "title", text.Title }, { "subtitle", text.Subtitle }, { "accent", text.Accent }, { "logs", text.Logs }
+        };
+    }
+
+    private bool HelperRunning(StudioApp app)
+    {
+        Mutex running;
+        if (!Mutex.TryOpenExisting(@"Local\" + app.Helper + "Splash.Artwork", out running)) return false;
+        running.Dispose();
+        return true;
+    }
+
+    private object AppList()
+    {
+        var list = new List<object>();
+        using (var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(RunKey))
+            foreach (StudioApp app in Apps)
             {
-                Directory.CreateDirectory(Current.Root);
-                File.WriteAllBytes(destination, Images.ToJpeg(dialog.FileName));
-                LoadAll();
-                Note("Saved " + Path.GetFileName(destination) + " — restart the helper to apply.");
+                AppProfile profile = AppProfile.Load(app.Root);
+                list.Add(new Dictionary<string, object> {
+                    { "id", app.Id }, { "name", app.Name }, { "theme", profile.Theme }, { "splash", profile.SplashOnStart },
+                    { "speed", profile.Speed }, { "helperExists", File.Exists(Path.Combine(StudioFolder(), app.Helper + ".exe")) },
+                    { "helperRunning", HelperRunning(app) }, { "autostart", key != null && key.GetValue(app.Helper) != null }
+                });
             }
-            catch (Exception error)
+        return list;
+    }
+
+    private Dictionary<string, object> State()
+    {
+        var themes = new List<object>();
+        foreach (string name in ThemeLibrary.Names())
+        {
+            string folder = ThemeLibrary.Folder(name);
+            IniFile ini = IniFile.Load(Path.Combine(folder, "theme.ini"));
+            string stamp = ThemeLibrary.Stamp(name);
+            string[] accents;
+            bool broken;
+            if (!accentCache.TryGetValue(stamp, out accents))
             {
-                if (!(error is IOException || error is InvalidDataException || error is UnauthorizedAccessException ||
-                    error is ArgumentException || error is NotSupportedException)) throw;
-                MessageBox.Show("Could not import that image.\n\n" + error.Message,
-                    "Theme Studio", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            }
-        }
-    }
-
-    private void RestartHelper()
-    {
-        string exe = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, Current.HelperExe);
-        if (!File.Exists(exe))
-        {
-            MessageBox.Show(Current.HelperExe + " was not found next to ThemeStudio.exe.",
-                "Theme Studio", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            return;
-        }
-        try
-        {
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(exe, "--artwork") { UseShellExecute = false });
-            Note("Helper restarted — the new artwork is now live in " + Current.Name + ".");
-        }
-        catch (Exception error)
-        {
-            if (!(error is System.ComponentModel.Win32Exception || error is InvalidOperationException ||
-                error is FileNotFoundException)) throw;
-            MessageBox.Show("Could not restart the helper.\n\n" + error.Message,
-                "Theme Studio", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-        }
-    }
-
-    private void RefreshThemes()
-    {
-        string selected = themes.SelectedItem as string;
-        themes.Items.Clear();
-        if (Directory.Exists(Current.ThemesRoot))
-            foreach (string directory in Directory.GetDirectories(Current.ThemesRoot))
-                themes.Items.Add(Path.GetFileName(directory));
-        if (selected != null && themes.Items.Contains(selected)) themes.SelectedItem = selected;
-        ShowThemePreview();
-    }
-
-    private string SelectedThemeDir
-    {
-        get
-        {
-            string name = themes.SelectedItem as string;
-            return name == null ? null : Path.Combine(Current.ThemesRoot, name);
-        }
-    }
-
-    private void ShowThemePreview()
-    {
-        string dir = SelectedThemeDir;
-        LoadPreview(themePreview, dir == null ? null : Path.Combine(dir, "wallpaper.jpg"));
-    }
-
-    private void SaveTheme()
-    {
-        string name = themeName.Text.Trim();
-        if (name.Length == 0) { Note("Type a theme name first."); return; }
-        foreach (char bad in Path.GetInvalidFileNameChars())
-            name = name.Replace(bad, '-');
-        string dir = Path.Combine(Current.ThemesRoot, name);
-        try
-        {
-            Directory.CreateDirectory(dir);
-            if (File.Exists(WallpaperPath)) File.Copy(WallpaperPath, Path.Combine(dir, "wallpaper.jpg"), true);
-            else File.Delete(Path.Combine(dir, "wallpaper.jpg"));
-            if (File.Exists(AvatarPath)) File.Copy(AvatarPath, Path.Combine(dir, "avatar.jpg"), true);
-            else File.Delete(Path.Combine(dir, "avatar.jpg"));
-            WriteText(Path.Combine(dir, "theme.txt"),
-                "style=" + styleBox.SelectedItem + "\r\n" +
-                "opacity=" + (byte)Math.Round(255 * Percents[opacityBox.SelectedIndex] / 100.0) + "\r\n" +
-                "skip=" + (skipBox.Checked ? 1 : 0) + "\r\n");
-            themeName.Clear();
-            RefreshThemes();
-            themes.SelectedItem = name;
-            Note("Theme \"" + name + "\" saved for " + Current.Name + ".");
-        }
-        catch (Exception error)
-        {
-            if (!(error is IOException || error is UnauthorizedAccessException)) throw;
-            MessageBox.Show("Could not save the theme.\n\n" + error.Message,
-                "Theme Studio", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-        }
-    }
-
-    private void ApplyTheme()
-    {
-        string dir = SelectedThemeDir;
-        if (dir == null) { Note("Select a theme to apply."); return; }
-        try
-        {
-            string wallpaper = Path.Combine(dir, "wallpaper.jpg");
-            if (File.Exists(wallpaper))
-            {
-                Directory.CreateDirectory(Current.Root);
-                File.Copy(wallpaper, WallpaperPath, true);
-            }
-            string avatar = Path.Combine(dir, "avatar.jpg");
-            if (File.Exists(avatar)) File.Copy(avatar, AvatarPath, true);
-            else TryDelete(AvatarPath);
-            string meta = Path.Combine(dir, "theme.txt");
-            string style = "natural"; byte opacity = 38; bool? skip = null;
-            if (File.Exists(meta))
-                foreach (string line in File.ReadAllLines(meta))
+                var found = new List<string>();
+                broken = false;
+                try
                 {
-                    int at = line.IndexOf('=');
-                    if (at <= 0) continue;
-                    string key = line.Substring(0, at).Trim(), value = line.Substring(at + 1).Trim();
-                    if (key == "style" && Array.IndexOf(Styles, value) >= 0) style = value;
-                    else if (key == "opacity") byte.TryParse(value, out opacity);
-                    else if (key == "skip") skip = value == "1";
+                    using (Bitmap bitmap = ImageCodec.DecodeJpeg(ImageCodec.ReadBytes(Path.Combine(folder, "wallpaper.jpg"))))
+                        foreach (Color c in ArtworkLook.SuggestAccents(bitmap, 4))
+                            found.Add(string.Format(CultureInfo.InvariantCulture, "#{0:X2}{1:X2}{2:X2}", c.R, c.G, c.B));
                 }
-            WriteText(StylePath, style);
-            WriteText(OpacityPath, opacity.ToString());
-            if (skip.HasValue) SetFlag(SkipPath, skip.Value);
-            LoadAll();
-            Note("Theme applied — restarting the helper.");
-            RestartHelper();
+                catch (Exception error)
+                {
+                    if (!(error is InvalidDataException || error is IOException || error is UnauthorizedAccessException ||
+                        error is ArgumentException || error is ExternalException || error is OutOfMemoryException)) throw;
+                    broken = true;
+                }
+                accents = found.ToArray();
+                accentCache[stamp] = accents;
+                brokenCache[stamp] = broken;
+            }
+            brokenCache.TryGetValue(stamp, out broken);
+            themes.Add(new Dictionary<string, object> {
+                { "name", name }, { "look", LookData(Look.Read(ini)) }, { "text", TextData(SplashText.Read(ini)) },
+                { "hasAvatar", File.Exists(Path.Combine(folder, "avatar.jpg")) }, { "stamp", stamp },
+                { "accents", accents }, { "broken", broken }
+            });
         }
-        catch (Exception error)
-        {
-            if (!(error is IOException || error is UnauthorizedAccessException)) throw;
-            MessageBox.Show("Could not apply the theme.\n\n" + error.Message,
-                "Theme Studio", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-        }
+        Rectangle area = Screen.FromControl(this).WorkingArea;
+        return new Dictionary<string, object> {
+            { "themes", themes }, { "apps", AppList() },
+            { "screen", new Dictionary<string, object> { { "w", area.Width }, { "h", area.Height } } }
+        };
     }
 
-    private void DeleteTheme()
+    // ---- eval hook (tests only, ANIMATED_STUDIO_EVAL=<file>) ----
+
+    private void PollEval()
     {
-        string dir = SelectedThemeDir;
-        if (dir == null) { Note("Select a theme to delete."); return; }
-        if (MessageBox.Show("Delete the theme \"" + Path.GetFileName(dir) + "\" for " + Current.Name + "?",
-            "Theme Studio", MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK) return;
-        try { Directory.Delete(dir, true); RefreshThemes(); Note("Theme deleted."); }
-        catch (Exception error)
-        {
-            if (!(error is IOException || error is UnauthorizedAccessException)) throw;
-            MessageBox.Show("Could not delete the theme.\n\n" + error.Message,
-                "Theme Studio", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-        }
+        FileInfo info = new FileInfo(evalFile);
+        if (!info.Exists) return;
+        string stamp = info.LastWriteTimeUtc.Ticks + ":" + info.Length;
+        if (stamp == evalStamp) return;
+        string code;
+        try { code = File.ReadAllText(evalFile, Encoding.UTF8); }
+        catch (IOException) { return; }
+        evalStamp = stamp;
+        RunEval(code);
     }
 
-    private static void TryDelete(string path)
+    private async void RunEval(string code)
     {
-        try { if (File.Exists(path)) File.Delete(path); }
-        catch (IOException) { }
-        catch (UnauthorizedAccessException) { }
-    }
-
-    private static void WriteText(string path, string content)
-    {
+        string result;
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(path));
-            File.WriteAllText(path, content);
-        }
-        catch (IOException) { }
-        catch (UnauthorizedAccessException) { }
-    }
-
-    private static void SetFlag(string path, bool on)
-    {
-        if (on) WriteText(path, "");
-        else TryDelete(path);
-    }
-}
-
-// Minimal image normalization: decode any GDI+ image and re-encode as JPEG
-// quality 94, matching the launcher's own wallpaper import path.
-internal static class Images
-{
-    internal static byte[] ToJpeg(string path)
-    {
-        using (var image = Image.FromFile(path))
-        {
-            if ((long)image.Width * image.Height > 64L * 1024 * 1024)
-                throw new InvalidDataException("Choose an image under 64 megapixels.");
-            using (var output = new MemoryStream())
-            using (var options = new EncoderParameters(1))
+            CoreWebView2 core = browser.CoreWebView2;
+            if (code.StartsWith("@capture ", StringComparison.Ordinal))
             {
-                options.Param[0] = new EncoderParameter(Encoder.Quality, 94L);
-                var codec = Array.Find(ImageCodecInfo.GetImageEncoders(), c => c.FormatID == ImageFormat.Jpeg.Guid);
-                image.Save(output, codec, options);
-                return output.ToArray();
+                string path = code.Substring(9).Trim();
+                using (var file = File.Create(path))
+                    await core.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png, file);
+                result = json.Serialize(new Dictionary<string, object> { { "ok", true }, { "captured", path } });
+            }
+            else if (code.StartsWith("@close", StringComparison.Ordinal))
+            {
+                result = json.Serialize(new Dictionary<string, object> { { "ok", true }, { "closing", true } });
+                File.WriteAllText(evalFile + ".out", result, new UTF8Encoding(false));
+                BeginInvoke(new Action(Close));
+                return;
+            }
+            else
+            {
+                string wrapped = "(function(){try{var r=(function(){" + code + "\n})();return JSON.stringify({ok:true,value:r===undefined?null:r});}" +
+                    "catch(e){return JSON.stringify({ok:false,error:String((e&&e.stack)||e)});}})()";
+                string raw = await core.ExecuteScriptAsync(wrapped);
+                result = json.DeserializeObject(raw) as string ?? raw;
             }
         }
+        catch (Exception error)
+        {
+            result = json.Serialize(new Dictionary<string, object> { { "ok", false }, { "error", error.Message } });
+        }
+        File.WriteAllText(evalFile + ".out", result, new UTF8Encoding(false));
     }
+
+    [DllImport("dwmapi.dll")] private static extern int DwmSetWindowAttribute(IntPtr window, int attribute, ref int value, int size);
 }

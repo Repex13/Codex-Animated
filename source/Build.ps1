@@ -12,7 +12,7 @@ try {
     $sources = '.\source\PortableStartup.cs', '.\source\ArtworkUpgrade.cs', '.\source\Launcher.cs',
         '.\source\ArtworkOverlay.cs', '.\source\PreviewArtworkChild.cs', '.\source\WallpaperSettings.cs',
         '.\source\AppTarget.cs', '.\source\ThemeSettings.cs', '.\source\ArtworkLook.cs', '.\source\ImageCodec.cs',
-        '.\source\SplashPage.cs', '.\source\DarkMenu.cs'
+        '.\source\SplashPage.cs', '.\source\DarkMenu.cs', '.\source\EmbeddedBundle.cs'
     $manifestTemplate = Get-Content 'source\app.manifest' -Raw
     $targets = @(
         @{ Define = 'APP_DEVIN';       Out = 'DevinAnimated.exe';       Identity = 'DevinAnimated';       Icon = 'source\launcher.ico' },
@@ -28,7 +28,14 @@ try {
     }
     $studioManifest = Join-Path $env:TEMP 'ThemeStudio.manifest'
     Set-Content -LiteralPath $studioManifest -Value ($manifestTemplate -replace 'name="DevinAnimated"', 'name="ThemeStudio"')
-    & $compiler /nologo /target:winexe /optimize+ /platform:x64 /out:ThemeStudio.exe /win32icon:source\launcher.ico /win32manifest:$studioManifest /r:System.Windows.Forms.dll /r:System.Drawing.dll .\source\ThemeStudio.cs
+    $studioFiles = @('Microsoft.Web.WebView2.Core.dll', 'Microsoft.Web.WebView2.WinForms.dll', 'WebView2Loader.dll',
+        'notices/LICENSE.txt', 'notices/NOTICE.txt')
+    $studioResources = @(foreach ($file in $studioFiles) { '/resource:{0},bundle/{0}' -f $file })
+    $studioResources += @('studio/index.html', 'studio/studio.css', 'studio/studio.js',
+        'web/index.html', 'web/style.css', 'web/animation.js', 'web/assets/contours.js') | ForEach-Object { '/resource:{0},{0}' -f $_ }
+    $studioSources = '.\source\ThemeStudio.cs', '.\source\ThemeSettings.cs', '.\source\ArtworkLook.cs', '.\source\ImageCodec.cs',
+        '.\source\SplashPage.cs', '.\source\EmbeddedBundle.cs'
+    & $compiler /nologo /target:winexe /optimize+ /platform:x64 /out:ThemeStudio.exe /win32icon:source\launcher.ico /win32manifest:$studioManifest /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Web.Extensions.dll /r:Microsoft.VisualBasic.dll /r:Microsoft.Web.WebView2.Core.dll /r:Microsoft.Web.WebView2.WinForms.dll @studioResources @studioSources
     if ($LASTEXITCODE -ne 0) { throw "The ThemeStudio.exe build failed with exit code $LASTEXITCODE." }
     Remove-Item -LiteralPath $studioManifest -ErrorAction SilentlyContinue
 } finally {

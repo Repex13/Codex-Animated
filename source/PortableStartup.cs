@@ -1,10 +1,7 @@
 using System;
 using System.ComponentModel;
 using System.IO;
-using System.Reflection;
 using System.Runtime.CompilerServices;
-using System.Security.Cryptography;
-using System.Threading;
 using System.Windows.Forms;
 
 internal static class PortableStartup
@@ -12,9 +9,9 @@ internal static class PortableStartup
     private static readonly string[] runtimeFiles = {
         "Microsoft.Web.WebView2.Core.dll", "Microsoft.Web.WebView2.WinForms.dll", "WebView2Loader.dll",
         "web/index.html", "web/style.css", "web/animation.js", "web/assets/artwork.jpg",
-        "web/assets/avatar.jpg", "web/assets/contours.js"
+        "web/assets/avatar.jpg", "web/assets/contours.js",
+        "notices/LICENSE.txt", "notices/NOTICE.txt"
     };
-    private static readonly string[] notices = { "notices/LICENSE.txt", "notices/NOTICE.txt" };
     internal static string BundleDirectory { get; private set; }
 
     [STAThread]
@@ -22,8 +19,9 @@ internal static class PortableStartup
     {
         try
         {
-            BundleDirectory = PrepareEmbeddedBundle();
-            AppDomain.CurrentDomain.AssemblyResolve += ResolveWebViewAssembly;
+            string root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), AppTarget.Product);
+            BundleDirectory = EmbeddedBundle.Prepare(typeof(PortableStartup).Assembly, root, AppTarget.HelperName + ".Bundle.", runtimeFiles);
+            EmbeddedBundle.ResolveWebViewFrom(BundleDirectory);
         }
         catch (Exception ex)
         {
@@ -39,64 +37,4 @@ internal static class PortableStartup
     // Keep WebView2 references outside this entry point until the resolver is ready.
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static int RunLauncher(string[] args) { return Launcher.Run(args); }
-
-    private static Assembly ResolveWebViewAssembly(object sender, ResolveEventArgs args)
-    {
-        string name = new AssemblyName(args.Name).Name;
-        if (name != "Microsoft.Web.WebView2.Core" && name != "Microsoft.Web.WebView2.WinForms")
-            return null;
-        return Assembly.LoadFrom(Path.Combine(BundleDirectory, name + ".dll"));
-    }
-
-    private static string PrepareEmbeddedBundle()
-    {
-        var assembly = typeof(PortableStartup).Assembly;
-        string build = assembly.ManifestModule.ModuleVersionId.ToString("N");
-        string folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            AppTarget.Product, "Runtime", build);
-        using (var mutex = new Mutex(false, @"Local\" + AppTarget.HelperName + ".Bundle." + build))
-        {
-            try
-            {
-                if (!mutex.WaitOne(TimeSpan.FromSeconds(15))) throw new IOException("The launcher files are busy. Try again.");
-            }
-            catch (AbandonedMutexException) { }
-            try
-            {
-                foreach (string name in runtimeFiles) PrepareFile(assembly, folder, name);
-                foreach (string name in notices) PrepareFile(assembly, folder, name);
-            }
-            finally { mutex.ReleaseMutex(); }
-        }
-        return folder;
-    }
-
-    private static void PrepareFile(Assembly assembly, string folder, string name)
-    {
-        string destination = Path.Combine(folder, name);
-        using (var embedded = assembly.GetManifestResourceStream("bundle/" + name))
-        using (var hash = SHA256.Create())
-        {
-            if (embedded == null) throw new InvalidDataException("Missing embedded file " + name + ".");
-            if (File.Exists(destination))
-            {
-                using (var existing = new FileStream(destination, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete))
-                {
-                    if (existing.Length == embedded.Length &&
-                        Convert.ToBase64String(hash.ComputeHash(existing)) == Convert.ToBase64String(hash.ComputeHash(embedded))) return;
-                }
-                embedded.Position = 0;
-            }
-            Directory.CreateDirectory(Path.GetDirectoryName(destination));
-            string staged = destination + "." + Guid.NewGuid().ToString("N") + ".tmp";
-            try
-            {
-                using (var target = new FileStream(staged, FileMode.CreateNew, FileAccess.Write, FileShare.None))
-                    embedded.CopyTo(target);
-                if (File.Exists(destination)) File.Replace(staged, destination, null);
-                else File.Move(staged, destination);
-            }
-            finally { File.Delete(staged); }
-        }
-    }
 }

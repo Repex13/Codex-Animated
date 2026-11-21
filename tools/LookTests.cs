@@ -43,6 +43,8 @@ internal static class LookTests
         AccentCases();
         ApplyCase();
         SplashPageCase();
+        LibraryOperations();
+        NameValidation();
         Console.WriteLine();
         Console.WriteLine(failures == 0 ? "ALL " + total + " CHECKS PASSED" : failures + " of " + total + " CHECKS FAILED");
         return failures == 0 ? 0 : 1;
@@ -522,6 +524,83 @@ internal static class LookTests
             SplashPage.RenderIndex(File.ReadAllBytes(Path.Combine(web, "index.html")), content, app));
         Console.WriteLine("rendered " + folder + " -> " + output);
         return 0;
+    }
+
+    private static void LibraryOperations()
+    {
+        string work = Temp("ops");
+        ThemeLibrary.RootOverride = Path.Combine(work, "Themes");
+        try
+        {
+            string source = Path.Combine(work, "My Wall.png");
+            using (var image = Solid(60, 40, Color.FromArgb(200, 40, 40))) image.Save(source, ImageFormat.Png);
+            string first = ThemeLibrary.Create(source);
+            string second = ThemeLibrary.Create(source);
+            Check("create: two creates from the same file name give X and X 2", first == "My Wall" && second == "My Wall 2", first + " | " + second);
+            IniFile created = IniFile.Load(Path.Combine(ThemeLibrary.Folder(first), "theme.ini"));
+            Check("create: defaults (opacity 15, title upper case, red-ish accent)",
+                created.Get("opacity") == "15" && created.Get("blur") == "0" && created.Get("title") == "MY WALL" && (created.Get("accent") ?? "").StartsWith("#"), created.Get("accent"));
+            Check("create: wallpaper.jpg is a decodable JPEG", ImageCodec.DecodeJpeg(File.ReadAllBytes(Path.Combine(ThemeLibrary.Folder(first), "wallpaper.jpg"))).Width == 60, null);
+            bool bad = false;
+            string junk = Path.Combine(work, "junk.png");
+            File.WriteAllText(junk, "not an image");
+            try { ThemeLibrary.Create(junk); } catch (InvalidDataException) { bad = true; }
+            Check("create: an unreadable image is refused and leaves no folder", bad && ThemeLibrary.Names().Length == 2, null);
+
+            string onTheme = Path.Combine(work, "AppOn"), other = Path.Combine(work, "AppOther");
+            Directory.CreateDirectory(onTheme);
+            Directory.CreateDirectory(other);
+            WriteJpeg(Path.Combine(onTheme, "wallpaper.jpg"), Color.Blue);
+            WriteJpeg(Path.Combine(other, "wallpaper.jpg"), Color.Blue);
+            string imageBefore = Convert.ToBase64String(File.ReadAllBytes(Path.Combine(onTheme, "wallpaper.jpg")));
+            AppProfile a = AppProfile.Load(onTheme); a.Theme = first; a.SplashOnStart = false; a.Save();
+            AppProfile b = AppProfile.Load(other); b.Theme = second; b.Save();
+            string otherBefore = File.ReadAllText(Path.Combine(other, "settings.ini"));
+            var look = new Look { Opacity = 33, Blur = 21, Tint = 40 };
+            var text = new SplashText { Title = "Edited", Accent = "#101010", Logs = new[] { "a", "b" } };
+            SplashText stored;
+            ThemeLibrary.Save(first, look, text, new[] { onTheme, other }, out stored);
+            AppProfile reread = AppProfile.Load(onTheme);
+            Check("save: theme.ini written and the app on that theme follows", IniFile.Load(Path.Combine(ThemeLibrary.Folder(first), "theme.ini")).Get("blur") == "21" &&
+                reread.Look.Opacity == 33 && reread.Look.Blur == 21 && reread.Text.Title == "Edited" && !reread.SplashOnStart, null);
+            Check("save: an app on another theme is not touched", File.ReadAllText(Path.Combine(other, "settings.ini")) == otherBefore, null);
+            Check("save: the app's images are not touched", Convert.ToBase64String(File.ReadAllBytes(Path.Combine(onTheme, "wallpaper.jpg"))) == imageBefore, null);
+            Color shown; SplashText.TryParseColor(stored.Accent, out shown);
+            Check("save: a dark accent is stored in legible form", ArtworkLook.Legible(shown).ToArgb() == shown.ToArgb() && shown.GetBrightness() >= 0.619, stored.Accent);
+
+            string renamed = ThemeLibrary.Rename(first, "Fresh Name", new[] { onTheme, other });
+            Check("rename: folder moved and theme= follows only the app on it",
+                renamed == "Fresh Name" && Directory.Exists(ThemeLibrary.Folder("Fresh Name")) && !Directory.Exists(ThemeLibrary.Folder(first)) &&
+                AppProfile.Load(onTheme).Theme == "Fresh Name" && AppProfile.Load(other).Theme == second, null);
+            string caseOnly = ThemeLibrary.Rename("Fresh Name", "fresh name", new[] { onTheme });
+            bool exactCase = false;
+            foreach (string n in ThemeLibrary.Names()) if (n == "fresh name") exactCase = true;
+            Check("rename: a letter-case-only change works", caseOnly == "fresh name" && exactCase && AppProfile.Load(onTheme).Theme == "fresh name", null);
+            bool clash = false;
+            try { ThemeLibrary.Rename("fresh name", second, new string[0]); } catch (IOException) { clash = true; }
+            Check("rename: refuses an existing name", clash, null);
+
+            string settingsBefore = File.ReadAllText(Path.Combine(onTheme, "settings.ini"));
+            ThemeLibrary.ClearReferences("fresh name", new[] { onTheme, other });
+            string settingsAfter = File.ReadAllText(Path.Combine(onTheme, "settings.ini"));
+            Check("clear references: theme= emptied, nothing else changed",
+                AppProfile.Load(onTheme).Theme == "" && settingsAfter == settingsBefore.Replace("theme=fresh name", "theme=") && AppProfile.Load(other).Theme == second, null);
+        }
+        finally { ThemeLibrary.RootOverride = null; }
+    }
+
+    private static void NameValidation()
+    {
+        string[] bad = { "", "   ", new string('x', 61), "a/b", "a:b", "what?", "CON", "nul", "Com1", "con.txt", "ends.", "tab	here" };
+        bool allRejected = true;
+        string leaked = "";
+        foreach (string name in bad)
+        {
+            try { ThemeLibrary.ValidateName(name); allRejected = false; leaked += "[" + name + "]"; }
+            catch (ArgumentException) { }
+        }
+        Check("names: empty, too long, invalid characters, device names and trailing dot are rejected", allRejected, leaked);
+        Check("names: trimmed and ordinary names pass", ThemeLibrary.ValidateName("  Hunter x Hunter ") == "Hunter x Hunter" && ThemeLibrary.ValidateName(new string('y', 60)).Length == 60, null);
     }
 
     private static int Sheets()

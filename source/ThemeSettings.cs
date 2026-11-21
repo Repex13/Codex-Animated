@@ -281,6 +281,176 @@ internal static class ThemeLibrary
         });
     }
 
+    private static readonly string[] ReservedNames = {
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+        "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9" };
+
+    // The trimmed name, or an ArgumentException saying what to change.
+    internal static string ValidateName(string name)
+    {
+        name = (name ?? "").Trim();
+        if (name.Length == 0) throw new ArgumentException("Enter a name.");
+        if (name.Length > 60) throw new ArgumentException("Use 60 characters or fewer.");
+        if (name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+            throw new ArgumentException("A name can't contain \\ / : * ? \" < > |.");
+        if (name.EndsWith(".", StringComparison.Ordinal)) throw new ArgumentException("A name can't end with a dot.");
+        string stem = name.Split('.')[0].TrimEnd();
+        if (Array.IndexOf(ReservedNames, stem.ToUpperInvariant()) >= 0)
+            throw new ArgumentException("\"" + stem + "\" is reserved by Windows. Use another name.");
+        return name;
+    }
+
+    // The library folder name that equals the given text exactly, or null.
+    internal static string Exact(string name)
+    {
+        if (name == null) return null;
+        foreach (string existing in Names()) if (string.Equals(existing, name, StringComparison.Ordinal)) return existing;
+        return null;
+    }
+
+    internal static bool UsesTheme(string root, string name)
+    {
+        return string.Equals(AppProfile.Load(root).Theme, name, StringComparison.OrdinalIgnoreCase);
+    }
+
+    // Writes theme.ini (clamped, accent made legible) and copies look and text into every app on this theme.
+    internal static Look Save(string name, Look look, SplashText text, IEnumerable<string> appRoots, out SplashText stored)
+    {
+        string exact = Exact(name);
+        if (exact == null) throw new FileNotFoundException("The theme \"" + name + "\" no longer exists.");
+        string path = Path.Combine(Folder(exact), "theme.ini");
+        Look clamped = null;
+        SplashText normalized = null;
+        WithLock(Folder(exact), delegate {
+            IniFile ini = IniFile.LoadStrict(path);
+            look.Write(ini);
+            clamped = Look.Read(ini);
+            clamped.Write(ini);
+            text.Write(ini);
+            normalized = SplashText.Read(ini);
+            Color accent;
+            if (SplashText.TryParseColor(normalized.Accent, out accent))
+            {
+                Color legible = ArtworkLook.Legible(accent);
+                normalized.Accent = string.Format(CultureInfo.InvariantCulture, "#{0:X2}{1:X2}{2:X2}", legible.R, legible.G, legible.B);
+            }
+            normalized.Write(ini);
+            ini.Save(path);
+        });
+        foreach (string root in appRoots)
+        {
+            if (!UsesTheme(root, exact)) continue;
+            AppProfile profile = AppProfile.LoadStrict(root);
+            profile.Look = clamped;
+            profile.Text = normalized;
+            profile.Save();
+        }
+        stored = normalized;
+        return clamped;
+    }
+
+    // Renames the folder (a case-only change goes through a temporary name) and fixes theme= in apps.
+    internal static string Rename(string name, string newName, IEnumerable<string> appRoots)
+    {
+        string exact = Exact(name);
+        if (exact == null) throw new FileNotFoundException("The theme \"" + name + "\" no longer exists.");
+        newName = ValidateName(newName);
+        if (string.Equals(exact, newName, StringComparison.Ordinal)) return exact;
+        bool caseOnly = string.Equals(exact, newName, StringComparison.OrdinalIgnoreCase);
+        if (!caseOnly && Directory.Exists(Folder(newName)))
+            throw new IOException("A theme called \"" + newName + "\" already exists.");
+        if (caseOnly)
+        {
+            string temporary = Folder(exact) + ".rename-" + Guid.NewGuid().ToString("N");
+            Directory.Move(Folder(exact), temporary);
+            Directory.Move(temporary, Folder(newName));
+        }
+        else Directory.Move(Folder(exact), Folder(newName));
+        foreach (string root in appRoots)
+        {
+            if (!UsesTheme(root, exact)) continue;
+            AppProfile profile = AppProfile.LoadStrict(root);
+            profile.Theme = newName;
+            profile.Save();
+        }
+        return newName;
+    }
+
+    // Imports a picture as a new theme named after the file; returns the folder name.
+    internal static string Create(string imagePath)
+    {
+        byte[] jpeg = ImageCodec.ToJpeg(imagePath);
+        Color suggestion = Color.Empty;
+        using (Bitmap decoded = ImageCodec.DecodeJpeg(jpeg))
+        {
+            Color[] accents = ArtworkLook.SuggestAccents(decoded, 1);
+            if (accents.Length > 0) suggestion = accents[0];
+        }
+        string baseName = CleanName(Path.GetFileNameWithoutExtension(imagePath));
+        string name = baseName;
+        for (int n = 2; Directory.Exists(Folder(name)); n++)
+        {
+            string suffix = " " + n.ToString(CultureInfo.InvariantCulture);
+            name = (baseName.Length + suffix.Length > 60 ? baseName.Substring(0, 60 - suffix.Length).TrimEnd() : baseName) + suffix;
+        }
+        string folder = Folder(name);
+        try
+        {
+            Directory.CreateDirectory(folder);
+            ImageCodec.SaveAtomic(Path.Combine(folder, "wallpaper.jpg"), jpeg);
+            var ini = new IniFile();
+            new Look().Write(ini);
+            var text = new SplashText();
+            string title = name.ToUpperInvariant();
+            text.Title = title.Length > 40 ? title.Substring(0, 40) : title;
+            Color accent = suggestion.IsEmpty ? Color.FromArgb(0xD9, 0x80, 0xA7) : ArtworkLook.Legible(suggestion);
+            text.Accent = string.Format(CultureInfo.InvariantCulture, "#{0:X2}{1:X2}{2:X2}", accent.R, accent.G, accent.B);
+            text.Write(ini);
+            ini.Save(Path.Combine(folder, "theme.ini"));
+        }
+        catch
+        {
+            try { Directory.Delete(folder, true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+            throw;
+        }
+        return name;
+    }
+
+    private static string CleanName(string raw)
+    {
+        var chars = new StringBuilder();
+        foreach (char c in raw ?? "")
+            chars.Append(Array.IndexOf(Path.GetInvalidFileNameChars(), c) >= 0 ? ' ' : c);
+        string name = string.Join(" ", chars.ToString().Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries)).Trim().TrimEnd('.', ' ');
+        if (name.Length > 60) name = name.Substring(0, 60).TrimEnd('.', ' ');
+        try { return ValidateName(name); }
+        catch (ArgumentException) { return "New theme"; }
+    }
+
+    // Empties theme= in every app that used the theme; their own copies keep working.
+    internal static void ClearReferences(string name, IEnumerable<string> appRoots)
+    {
+        foreach (string root in appRoots)
+        {
+            if (!UsesTheme(root, name)) continue;
+            AppProfile profile = AppProfile.LoadStrict(root);
+            profile.Theme = "";
+            profile.Save();
+        }
+    }
+
+    // Wallpaper and avatar write times and sizes combined; changes whenever either image does.
+    internal static string Stamp(string name)
+    {
+        long value = 17;
+        foreach (string file in new[] { "wallpaper.jpg", "avatar.jpg" })
+        {
+            var info = new FileInfo(Path.Combine(Folder(name), file));
+            value = value * 31 + (info.Exists ? info.LastWriteTimeUtc.Ticks ^ info.Length : 0);
+        }
+        return (value & long.MaxValue).ToString("x", CultureInfo.InvariantCulture);
+    }
+
     // Serializes everything that writes into one settings or theme folder, in every process.
     internal static void WithLock(string folder, Action action)
     {
