@@ -11,7 +11,15 @@ using System.Text.RegularExpressions;
 internal sealed class SplashContent
 {
     internal const string DefaultAccent = "#D980A7";
-    internal string Title = "", Subtitle = "", Accent = DefaultAccent, Theme = "";
+    // The text the original animation shipped with; used when an app has no theme and no text of its own.
+    internal const string UpstreamTitle = "\u98DE\u884C\u96EA\u7ED2";
+    internal const string UpstreamSubtitle = "\u5E7D\u7075\u6765\u5230\u2026\u4F60\u8EAB\u8FB9\uFF5E";
+    internal const string UpstreamLabel = "RESONANCE / AEMEATH";
+    internal static readonly string[] UpstreamLogs = {
+        "MAGI SYSTEM \u00B7 CASPER / MELCHIOR / BALTHASAR", "loading renderer surface ........ ok",
+        "entry plug depth 21.6 ........... ok", "LCL pressure nominal" };
+
+    internal string Title = "", Subtitle = "", Accent = DefaultAccent, Theme = "", Label = "", Caption = "";
     internal string[] Logs = { "", "", "", "" };
     internal int Rate = 1;
 
@@ -25,12 +33,16 @@ internal sealed class SplashContent
         SplashText text = SplashText.Read(ini);
         var content = new SplashContent();
         string upper = appName.ToUpperInvariant();
-        content.Title = text.Title.Length > 0 ? text.Title : upper;
-        content.Subtitle = text.Subtitle;
+        bool original = !isTheme && (ini.Get("theme") ?? "").Trim().Length == 0 &&
+            text.Title.Length == 0 && text.Subtitle.Length == 0 && text.Logs.Length == 0;
+        content.Title = original ? UpstreamTitle : text.Title.Length > 0 ? text.Title : upper;
+        content.Subtitle = original ? UpstreamSubtitle : text.Subtitle;
         content.Accent = text.Accent.Length > 0 ? text.Accent : DefaultAccent;
         content.Theme = isTheme ? Path.GetFileName(folder.TrimEnd('\\', '/')) : (ini.Get("theme") ?? "").Trim();
         content.Rate = !isTheme && (ini.Get("speed") ?? "").Trim() == "2" ? 2 : 1;
-        string[] lines = text.Logs;
+        content.Caption = upper + (original ? " INITIALIZE / TYPE-0" : " INITIALIZE");
+        content.Label = original ? UpstreamLabel : content.Theme.Length > 0 ? content.Theme : appName;
+        string[] lines = original ? UpstreamLogs : text.Logs;
         if (lines.Length == 0)
             lines = new[] {
                 appName + " launcher ready",
@@ -54,7 +66,7 @@ internal static class SplashPage
         var values = new System.Collections.Generic.Dictionary<string, string>
         {
             { "APP", appName.ToUpperInvariant() }, { "TITLE", content.Title }, { "SUBTITLE", content.Subtitle },
-            { "THEME", content.Theme }, { "ACCENT", accent }, { "RATE", content.Rate == 2 ? "2" : "1" },
+            { "THEME", content.Theme }, { "CAPTION", content.Caption }, { "LABEL", content.Label }, { "ACCENT", accent }, { "RATE", content.Rate == 2 ? "2" : "1" },
             { "LOG1", content.Logs[0] }, { "LOG2", content.Logs[1] }, { "LOG3", content.Logs[2] }, { "LOG4", content.Logs[3] }
         };
         // One pass, so text that looks like a token is never substituted again.

@@ -9,16 +9,16 @@
     text: Object.assign({ title: name.toUpperCase(), subtitle: '', accent: accents[0], logs: [] }, text), accents
   });
   let themes = empty ? [] : [
-    make('A Silent Voice', { opacity: 18 }, { subtitle: '聲の形', accent: '#F4A6C6', logs: ['KOE NO KATACHI · THE SHAPE OF VOICE', 'sign language loaded ......... ok'] }, ['#F4A6C6', '#7FD3E6', '#E9B44C']),
-    make('Death Note', { opacity: 18, blur: 24, dim: 52 }, { subtitle: '計画通り', accent: '#EF5B4C' }, ['#EF5B4C', '#E9B44C']),
-    make('Fullmetal Alchemist', {}, { subtitle: '等価交換', accent: '#E9B44C' }, ['#E9B44C', '#8FD694', '#7FD3E6']),
-    make('Hunter x Hunter', { blur: 13, tint: 100 }, { title: 'HUNTER × HUNTER', subtitle: '天空闘技場・受付中', accent: '#B49CFF' }, []),
-    make('Phantom Troupe', { blur: 13, tint: 100 }, { subtitle: '幻影旅団・活動開始', accent: '#E0667A' }, ['#E0667A'])
+    make('Sunset harbor', { opacity: 18 }, { subtitle: 'Evening at the pier', accent: '#E9B44C', logs: ['HARBOR CONTROL \u00B7 LINK OPEN', 'tide tables loaded ......... ok', 'lanterns lit ......... ok', 'all quiet on the water'] }, ['#E9B44C', '#EF5B4C', '#7FD3E6']),
+    make('Night train', { opacity: 18, blur: 24, dim: 52 }, { accent: '#7FD3E6' }, ['#7FD3E6', '#B49CFF']),
+    make('Paper cranes', { opacity: 14, blur: 13 }, { subtitle: 'Folded by hand', accent: '#D980A7' }, ['#D980A7', '#8FD694', '#E9B44C']),
+    make('Glass garden', { blur: 13, tint: 100, tintColor: '#3C9C8F' }, { title: 'GLASS GARDEN', subtitle: 'Open until dusk', accent: '#8FD694' }, []),
+    make('Low tide', { opacity: 22, dim: 30 }, { accent: '#B49CFF' }, ['#B49CFF'])
   ];
   const apps = [
-    { id: 'devin', name: 'Devin', theme: 'A Silent Voice', splash: true, speed: 1, helperExists: true, helperRunning: true, autostart: true },
-    { id: 'antigravity', name: 'Antigravity', theme: 'Hunter x Hunter', splash: true, speed: 1, helperExists: true, helperRunning: false, autostart: true },
-    { id: 'codex', name: 'Codex', theme: 'Hunter x Hunter', splash: false, speed: 2, helperExists: false, helperRunning: false, autostart: false }
+    { id: 'devin', name: 'Devin', theme: 'Sunset harbor', splash: true, speed: 1, helperExists: true, helperRunning: true, autostart: true },
+    { id: 'antigravity', name: 'Antigravity', theme: 'Glass garden', splash: true, speed: 1, helperExists: true, helperRunning: false, autostart: true },
+    { id: 'codex', name: 'Codex', theme: 'Glass garden', splash: false, speed: 2, helperExists: false, helperRunning: false, autostart: false }
   ];
   const listeners = [];
   const state = () => JSON.parse(JSON.stringify({ themes, apps, screen: { w: 2560, h: 1440 } }));
@@ -49,6 +49,6 @@
       }
     }
   };
-  window.__imgUrl = (kind, p) => kind === 'avatar' ? `../themes/${p.theme}/avatar.jpg` : `../themes/${p.theme}/wallpaper.jpg`;
+  window.__imgUrl = (kind, p) => kind === 'avatar' ? '../web/assets/avatar.jpg' : '../web/assets/artwork.jpg';
   window.__splashUrl = () => null;
 })();

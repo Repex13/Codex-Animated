@@ -70,7 +70,7 @@ internal static class LookTests
         string path = Path.Combine(folder, "a.ini");
         var ini = new IniFile();
         ini.Set("Unknown", "kept");
-        ini.Set("title", "\u8072\u306E\u5F62");
+        ini.Set("title", "\u5915\u713C\u3051\u306E\u6E2F");
         ini.Set("note", "one\r\ntwo");
         ini.Save(path);
         byte[] bytes = File.ReadAllBytes(path);
@@ -80,7 +80,7 @@ internal static class LookTests
             text.Split(new[] { "\r\n" }, StringSplitOptions.RemoveEmptyEntries).Length == 3, null);
         IniFile back = IniFile.Load(path);
         Check("ini: unknown key kept and key lookup case-insensitive", back.Get("UNKNOWN") == "kept", null);
-        Check("ini: Japanese value survives", back.Get("title") == "\u8072\u306E\u5F62", null);
+        Check("ini: Japanese value survives", back.Get("title") == "\u5915\u713C\u3051\u306E\u6E2F", null);
         Check("ini: line break stripped", back.Get("note") == "onetwo", back.Get("note"));
         Check("ini: missing key is null", back.Get("nope") == null, null);
         File.WriteAllText(path, "# c\r\n; c\r\n\r\n  key = a=b \r\nkey=last\r\nbad line\r\n", new UTF8Encoding(false));
@@ -478,6 +478,13 @@ internal static class LookTests
         finally { ThemeLibrary.RootOverride = null; }
     }
 
+    private static string CodePoints(string value)
+    {
+        var points = new List<string>();
+        foreach (char c in value) points.Add("U+" + ((int)c).ToString("X4"));
+        return value.Length + ": " + string.Join(" ", points.ToArray());
+    }
+
     private static void SplashPageCase()
     {
         string folder = Temp("splash");
@@ -498,9 +505,35 @@ internal static class LookTests
             html.Contains("<div>&gt; first</div><div>&gt; second</div><div></div><div></div>"), html);
         Check("splash: no token remains", !html.Contains("{{"), null);
         Check("splash: speed=2 from settings.ini", html.Contains("data-rate=\"2\""), null);
+        Check("splash: caption and label tokens for an app with its own text", content.Caption == "DEVIN INITIALIZE" && content.Label == "Devin", content.Caption);
         SplashContent plain = SplashContent.Load(Temp("splash-empty"), "Devin", new Size(888, 500));
-        Check("splash: defaults use app name and artwork size",
-            plain.Title == "DEVIN" && plain.Logs[1] == "> custom artwork" && plain.Logs[2] == "> artwork 888 \u00D7 500" && plain.Logs[3] == "> opening Devin", plain.Logs[2]);
+        string[] expectedLogs = {
+            "> MAGI SYSTEM \u00B7 CASPER / MELCHIOR / BALTHASAR", "> loading renderer surface ........ ok",
+            "> entry plug depth 21.6 ........... ok", "> LCL pressure nominal" };
+        bool logsOk = true;
+        for (int i = 0; i < 4; i++) logsOk &= plain.Logs[i] == expectedLogs[i];
+        Check("splash: a folder without settings gets the original project's text (title, subtitle, four lines, label, caption)",
+            plain.Title == "\u98DE\u884C\u96EA\u7ED2" && plain.Subtitle == "\u5E7D\u7075\u6765\u5230\u2026\u4F60\u8EAB\u8FB9\uFF5E" && logsOk &&
+            plain.Label == "RESONANCE / AEMEATH" && plain.Caption == "DEVIN INITIALIZE / TYPE-0", CodePoints(plain.Title) + " | " + CodePoints(plain.Subtitle));
+        Console.WriteLine("     title code points: " + CodePoints(plain.Title));
+        Console.WriteLine("     subtitle code points: " + CodePoints(plain.Subtitle));
+        Console.WriteLine("     label: " + CodePoints(plain.Label));
+        Console.WriteLine("     caption: " + CodePoints(plain.Caption));
+        for (int i = 0; i < 4; i++) Console.WriteLine("     log " + (i + 1) + ": " + CodePoints(plain.Logs[i]));
+        string themeFolder = Temp("splash-theme");
+        var themeIni = new IniFile();
+        themeIni.Set("title", "SAMPLE");
+        themeIni.Set("subtitle", "Quiet harbor");
+        themeIni.Save(Path.Combine(themeFolder, "theme.ini"));
+        SplashContent themed = SplashContent.Load(themeFolder, "Devin", new Size(800, 600));
+        Check("splash: a theme folder renders the theme's text with the plain caption and its name as the label",
+            themed.Title == "SAMPLE" && themed.Subtitle == "Quiet harbor" && themed.Caption == "DEVIN INITIALIZE" && themed.Label == Path.GetFileName(themeFolder) && themed.Logs[0] == "> Devin launcher ready", themed.Label);
+        var themedApp = new IniFile();
+        themedApp.Set("theme", "Some theme");
+        string themedAppFolder = Temp("splash-themed-app");
+        themedApp.Save(Path.Combine(themedAppFolder, "settings.ini"));
+        SplashContent keep = SplashContent.Load(themedAppFolder, "Devin", new Size(800, 600));
+        Check("splash: an app with a theme set does not get the original text", keep.Title == "DEVIN" && keep.Caption == "DEVIN INITIALIZE" && keep.Label == "Some theme", keep.Title);
     }
 
     private static int RenderSplash(string folder, string app, string output)
@@ -600,7 +633,7 @@ internal static class LookTests
             catch (ArgumentException) { }
         }
         Check("names: empty, too long, invalid characters, device names and trailing dot are rejected", allRejected, leaked);
-        Check("names: trimmed and ordinary names pass", ThemeLibrary.ValidateName("  Hunter x Hunter ") == "Hunter x Hunter" && ThemeLibrary.ValidateName(new string('y', 60)).Length == 60, null);
+        Check("names: trimmed and ordinary names pass", ThemeLibrary.ValidateName("  Sunset harbor ") == "Sunset harbor" && ThemeLibrary.ValidateName(new string('y', 60)).Length == 60, null);
     }
 
     private static int Sheets()

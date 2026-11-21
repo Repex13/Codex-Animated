@@ -3,4 +3,5 @@
 /CodexAnimated.exe
 /ThemeStudio.exe
 /tools/out/
-/themes/**/*.jpg
+/themes/
+/dist/

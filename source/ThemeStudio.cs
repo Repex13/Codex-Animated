@@ -42,12 +42,17 @@ internal static class ThemeStudioProgram
             {
                 if (!evalMode)
                 {
-                    IntPtr existing = FindWindow(null, "Theme Studio");
-                    if (existing != IntPtr.Zero)
-                    {
-                        if (IsIconic(existing)) ShowWindow(existing, 9);
-                        SetForegroundWindow(existing);
-                    }
+                    uint self = (uint)System.Diagnostics.Process.GetCurrentProcess().Id;
+                    foreach (var other in System.Diagnostics.Process.GetProcessesByName("ThemeStudio"))
+                        using (other)
+                        {
+                            if ((uint)other.Id == self) continue;
+                            IntPtr existing = other.MainWindowHandle;
+                            if (existing == IntPtr.Zero) continue;
+                            if (IsIconic(existing)) ShowWindow(existing, 9);
+                            SetForegroundWindow(existing);
+                            break;
+                        }
                 }
                 return 0;
             }
@@ -79,7 +84,6 @@ internal static class ThemeStudioProgram
         return 0;
     }
 
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern IntPtr FindWindow(string cls, string title);
     [DllImport("user32.dll")] private static extern bool IsIconic(IntPtr window);
     [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr window, int command);
     [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr window);
@@ -127,8 +131,6 @@ internal sealed class StudioForm : Form
         BackColor = Color.FromArgb(0x0F, 0x10, 0x14);
         StartPosition = FormStartPosition.Manual;
         try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch (ArgumentException) { }
-        ClientSize = new Size(1240, 800);
-        MinimumSize = SizeFromClientSize(new Size(1040, 660));
         PlaceWindow();
         browser = new WebView2 { Dock = DockStyle.Fill, DefaultBackgroundColor = BackColor, AllowExternalDrop = false };
         Controls.Add(browser);
@@ -150,6 +152,26 @@ internal sealed class StudioForm : Form
 
     private static string StudioIni { get { return Path.Combine(ThemeLibrary.SharedRoot, "studio.ini"); } }
 
+    private static float ScaleAt(Point point)
+    {
+        try
+        {
+            IntPtr monitor = MonitorFromPoint(point, 2);
+            uint x, y;
+            if (GetDpiForMonitor(monitor, 0, out x, out y) == 0 && x > 0) return x / 96f;
+        }
+        catch (DllNotFoundException) { }
+        catch (EntryPointNotFoundException) { }
+        return 1f;
+    }
+
+    private void SetSizes(float scale)
+    {
+        ClientSize = new Size((int)Math.Round(1240 * scale), (int)Math.Round(800 * scale));
+        MinimumSize = SizeFromClientSize(new Size((int)Math.Round(1040 * scale), (int)Math.Round(660 * scale)));
+    }
+
+    // Client size and minimum size are in CSS pixels, scaled by the DPI of the monitor the window opens on.
     private void PlaceWindow()
     {
         Rectangle saved;
@@ -158,9 +180,15 @@ internal sealed class StudioForm : Form
         {
             var center = new Point(saved.Left + saved.Width / 2, saved.Top + saved.Height / 2);
             foreach (Screen screen in Screen.AllScreens)
-                if (screen.WorkingArea.Contains(center)) { Bounds = saved; return; }
+                if (screen.WorkingArea.Contains(center))
+                {
+                    SetSizes(ScaleAt(center));
+                    Bounds = saved;
+                    return;
+                }
         }
         Rectangle area = Screen.FromPoint(Cursor.Position).WorkingArea;
+        SetSizes(ScaleAt(new Point(area.Left + area.Width / 2, area.Top + area.Height / 2)));
         Location = new Point(area.Left + Math.Max(0, (area.Width - Width) / 2), area.Top + Math.Max(0, (area.Height - Height) / 2));
     }
 
@@ -274,7 +302,11 @@ internal sealed class StudioForm : Form
     private void Serve(CoreWebView2Environment environment, CoreWebView2WebResourceRequestedEventArgs a)
     {
         string uriText = a.Request.Uri;
-        if (!uriText.StartsWith(Origin, StringComparison.Ordinal)) return;
+        if (!uriText.StartsWith(Origin, StringComparison.Ordinal))
+        {
+            a.Response = environment.CreateWebResourceResponse(null, 403, "Forbidden", "Cache-Control: no-store");
+            return;
+        }
         byte[] body = null;
         string type = "text/plain; charset=utf-8";
         int status = 403;
@@ -425,7 +457,8 @@ internal sealed class StudioForm : Form
                 StudioApp app = FindApp(id) ?? Apps[0];
                 byte[] wallpaper = ImageCodec.ReadBytes(Path.Combine(folder, "wallpaper.jpg"));
                 Size size;
-                using (var image = Image.FromStream(new MemoryStream(wallpaper, false), false, false)) size = image.Size;
+                using (var memory = new MemoryStream(wallpaper, false))
+                using (var image = Image.FromStream(memory, false, false)) size = image.Size;
                 SplashContent content = SplashContent.Load(folder, app.Name, size);
                 type = "text/html; charset=utf-8";
                 return SplashPage.RenderIndex(Embedded("web/index.html"), content, app.Name);
@@ -748,7 +781,7 @@ internal sealed class StudioForm : Form
         {
             string folder = ThemeLibrary.Folder(name);
             IniFile ini = IniFile.Load(Path.Combine(folder, "theme.ini"));
-            string stamp = ThemeLibrary.Stamp(name);
+            string stamp = name + "|" + ThemeLibrary.Stamp(name);
             string[] accents;
             bool broken;
             if (!accentCache.TryGetValue(stamp, out accents))
@@ -774,7 +807,7 @@ internal sealed class StudioForm : Form
             brokenCache.TryGetValue(stamp, out broken);
             themes.Add(new Dictionary<string, object> {
                 { "name", name }, { "look", LookData(Look.Read(ini)) }, { "text", TextData(SplashText.Read(ini)) },
-                { "hasAvatar", File.Exists(Path.Combine(folder, "avatar.jpg")) }, { "stamp", stamp },
+                { "hasAvatar", File.Exists(Path.Combine(folder, "avatar.jpg")) }, { "stamp", ThemeLibrary.Stamp(name) },
                 { "accents", accents }, { "broken", broken }
             });
         }
@@ -836,4 +869,6 @@ internal sealed class StudioForm : Form
     }
 
     [DllImport("dwmapi.dll")] private static extern int DwmSetWindowAttribute(IntPtr window, int attribute, ref int value, int size);
+    [DllImport("user32.dll")] private static extern IntPtr MonitorFromPoint(Point point, uint flags);
+    [DllImport("shcore.dll")] private static extern int GetDpiForMonitor(IntPtr monitor, int type, out uint x, out uint y);
 }

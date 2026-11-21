@@ -1,6 +1,6 @@
 # Animated Launchers for Windows
 
-This project builds one animated launcher per supported app — `DevinAnimated.exe`, `AntigravityAnimated.exe`, and `CodexAnimated.exe` — plus `ThemeStudio.exe`, a small configurator for switching wallpaper, avatar, style, and opacity and for swapping between saved themes. Each launcher opens with a 12-second animation, starts its app, and keeps the artwork visible inside the app window, its taskbar hover thumbnail, and its Alt+Tab card.
+This project builds one animated launcher per supported app — `DevinAnimated.exe`, `AntigravityAnimated.exe`, and `CodexAnimated.exe` — plus `ThemeStudio.exe`, a small studio for editing themes. A theme is a wallpaper with a look (visibility, blur, dim, tint, and which part of the image stays in view) and the text of the 12-second startup animation (title, subtitle, accent color, and boot lines). All three apps share one theme library. Each app's helper plays the animation when the app starts and keeps the artwork visible inside the app window, its taskbar hover thumbnail, and its Alt+Tab card.
 
 ![A silhouetted girl and birds by the water, with a city skyline under a pink and violet sunset](web/assets/artwork.jpg)
 
@@ -8,41 +8,25 @@ This project builds one animated launcher per supported app — `DevinAnimated.e
 
 You'll need 64-bit Windows (x64), at least one of the supported apps (Devin, Antigravity IDE, or Codex), and Microsoft Edge WebView2 Evergreen Runtime for the animation. [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/#download)
 
-1. Build from source (see below) or copy the built executables somewhere you want to keep them. Keeping them together in one folder lets Theme Studio restart each helper for you.
-2. Use the matching launcher — or a shortcut to it — for future animated starts. Opening the app from its usual shortcut skips the startup animation.
+1. Download the latest `Codex-Animated-v…-windows-x64.zip` from [Releases](https://github.com/Synaap/Codex-Animated/releases) and extract it anywhere.
+2. Double-click `Install.cmd`. It copies the four executables to `%LOCALAPPDATA%\Programs\AnimatedLaunchers`, sets up the helper of each supported app it finds (the helper starts with Windows and starts now), clears the downloaded-file mark from its installed copies so Windows does not ask again at every sign-in, and adds a Start menu shortcut for Theme Studio. To turn on another app's helper later, use Theme Studio under **Apps and startup**. If you installed an earlier version, it also moves your shortcuts to the new folder.
 
-Choose **Skip** or press **Esc** to go straight to the app. The launcher also skips playback when Windows requests reduced motion. To watch the animation by itself, pass `--preview` to the executable.
+From a clone of this repository, `Install.cmd` builds the executables first and then does the same.
 
-When upgrading, you can keep your saved wallpaper. If a previous or custom helper is still active, choose **Exit artwork** in its notification-area menu before running the new launcher.
+Open your apps the way you always do. The animation plays whenever the app starts and its window comes to the front, whether you used its usual shortcut, the Start menu, or a launcher. It never plays when the app was already open, and an app that starts in the background does not get one. Starting an app through its launcher (`DevinAnimated.exe` and so on) opens the app at once and plays the animation on top.
 
-Optional: to have a helper attach whenever its app opens — even without an animated launch — add `<App>Animated.exe --artwork` to `HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run`. Each helper waits in the notification area and attaches when its app's window appears.
+Choose **Skip** or press **Esc** to dismiss the animation. The animation is also skipped when Windows requests reduced motion. To watch it by itself, pass `--preview` to a launcher executable.
 
-## Choose a wallpaper
+## Themes and Theme Studio
 
-Right-click the app's **artwork** icon in the Windows notification area and select **Choose wallpaper…**. Pick a JPEG, PNG, or BMP. The helper updates the window and its Windows previews immediately. On the next animated start, the scanner frames your picture, traces its outlines, and reveals that same image in color.
+Open **Theme Studio** from the Start menu or the helper's notification-area menu. The left rail lists your themes, and **New theme** imports a JPEG, PNG, or BMP.
 
-The launcher saves a local copy, so you can move or delete the original. Choose **Restore default wallpaper** to bring back the bundled sunset in both the app and the animation.
+- The preview in the middle has two views. **In the app** draws your wallpaper over a mock editor with the same look the helper uses; drag it to choose which part of the image stays in view. **Startup animation** shows the real animation page for the theme.
+- The right side holds the wallpaper look (presets, visibility, blur, dim, tint, tint color) and the animation text (title, subtitle, accent color, avatar, boot lines). Leave the text empty and the animation shows your app's name.
+- **Use on** puts the theme on an app. Edits save by themselves and reach every app that uses the theme right away, so there is no save button and no restart.
+- **Apps and startup** sets, for each app, its theme, whether the animation plays on start, its speed, and whether its helper starts with Windows.
 
-## Choose an avatar
-
-Select **Choose avatar…** to set the portrait inside the splash's circular radar independently of the wallpaper. It applies on the next animated start. Choose **Restore default avatar** to go back to using the wallpaper image.
-
-## Artwork style and opacity
-
-The **Artwork style** submenu processes the overlay without touching your saved image:
-
-- **Natural** — the wallpaper as-is.
-- **Soften for readability** — blurs and darkens the artwork so text stays easy to read on top of it.
-- **Dim for readability** — a stronger blur and shade: the artwork becomes a soft dark texture.
-- **Nen aura tint** — maps the artwork to a violet duotone.
-
-The **Artwork opacity** submenu picks 10%, 15%, 20%, or 25%. Both settings persist and apply immediately to the running window.
-
-**Skip splash when the app is open** is a toggle: while checked, launching through the shortcut goes straight to the app whenever a window already exists, so the animation only plays on a cold start.
-
-## Theme Studio
-
-`ThemeStudio.exe` edits the same settings files the helpers read, for whichever target app you pick at the top: wallpaper and splash avatar pickers with previews, the style and opacity controls, the skip-splash toggle, and a theme library under `%LOCALAPPDATA%\<App> Animated\Themes`. A theme bundles a wallpaper, optional avatar, style, opacity, and the skip flag. **Apply** copies the theme into place and restarts the app's artwork helper so it lands immediately; **Save current** stores the live setup as a new theme.
+Deleting a theme sends it to the Recycle Bin. Apps keep their own copy of the wallpaper, so what an app shows does not change.
 
 ## While using the app
 
@@ -50,13 +34,19 @@ The helper draws the artwork at the selected opacity across the app window. Text
 
 The helper stays in the notification area when the app closes. It reattaches when the app reopens or replaces its main window, and follows the active window if several are open.
 
-Right-click the app's **artwork** icon in the Windows notification area (check the hidden icons if needed). Choose **Hide artwork** or **Show artwork** to toggle it. **Exit artwork** closes the helper and leaves the app open.
+Right-click the app's **artwork** icon in the Windows notification area (check the hidden icons if needed). Open **Theme Studio…**, pick a theme from **Themes**, choose **Hide artwork** or **Show artwork**, or turn the startup animation on or off. **Exit** closes the helper and leaves the app open.
 
 While the artwork is visible, maximize and restore are instant for that window. Hiding the artwork or exiting the helper releases the transition setting. If Windows cannot attach the image inside the app, the helper uses a separate click-through window. In that fallback mode, Windows previews can omit the artwork.
 
 ## How it works
 
-The launcher loads the animation from local files in its own WebView2 session, then starts the app: `Devin.exe` or `Antigravity IDE.exe` from the local install (resolved from the standard install folders and the registered protocol), or Codex through its Microsoft Store app identity. A separate helper attaches the artwork through Windows window-management APIs; it verifies the window belongs to the real app — the executable path for Devin and Antigravity, the package family `OpenAI.Codex_2p2nqsd0c76g0` for Codex — before attaching. It runs as your Windows user, leaves the app installations intact, and opens no debugging port.
+The helper watches for the app's window. When the app starts, the helper plays the animation, which it loads from local files in its own WebView2 session. A launcher opens the app — `Devin.exe` or `Antigravity IDE.exe` from the local install (resolved from the standard install folders and the registered protocol), or Codex through its Microsoft Store app identity — and plays the same animation. The helper attaches the artwork through Windows window-management APIs; it verifies the window belongs to the real app — the executable path for Devin and Antigravity, the package family `OpenAI.Codex_2p2nqsd0c76g0` for Codex — before attaching. Everything runs locally as your Windows user, leaves the app installations intact, and opens no debugging port.
+
+## Where data lives
+
+- `%LOCALAPPDATA%\Animated Launchers\Themes\<name>` holds each theme: `theme.ini`, `wallpaper.jpg`, and an optional `avatar.jpg`.
+- `%LOCALAPPDATA%\<App> Animated` holds one app's `settings.ini` and its own copy of the wallpaper and avatar. The helper and the animation read only this folder. With no copy, the bundled sunset is used.
+- `%LOCALAPPDATA%\Animated Launchers\studio.ini` remembers where the Theme Studio window was.
 
 ## Build from source
 
@@ -66,11 +56,13 @@ Clone this repository or download the source archive. Open PowerShell in the rep
 .\source\Build.ps1
 ```
 
-The script uses the 64-bit .NET Framework C# compiler and the WebView2 SDK DLLs included in the repository. It writes four executables — `DevinAnimated.exe`, `AntigravityAnimated.exe`, `CodexAnimated.exe`, and `ThemeStudio.exe` — to the same folder as `web`. Each launcher is compiled from the same sources with a per-app `APP_*` define selected in `source/AppTarget.cs`. To change the animation itself, edit the files in `web` and rebuild.
+The script uses the 64-bit .NET Framework C# compiler and the WebView2 SDK DLLs included in the repository. It writes four executables — `DevinAnimated.exe`, `AntigravityAnimated.exe`, `CodexAnimated.exe`, and `ThemeStudio.exe` — to the same folder as `web`. Each launcher is compiled from the same sources with a per-app `APP_*` define selected in `source/AppTarget.cs`. To change the animation itself, edit the files in `web` and rebuild. The Theme Studio page is in `studio`.
+
+`.\tools\Test.ps1` builds and runs the offline tests for the look and theme logic. `.\tools\Package.ps1` builds and writes the release zip and its checksum to `dist`.
 
 ## Uninstall
 
-Choose **Exit artwork** in the notification area, delete the executables or extracted folder, and remove any shortcuts and `Run` entries you created. Each app keeps its runtime cache, WebView2 profile, saved wallpaper, and theme library in `%LOCALAPPDATA%\<App> Animated`. Delete those folders if you also want to clear those files.
+Run `Uninstall.cmd`. It stops the helpers, removes their start-with-Windows entries, points shortcuts back to the native apps (or removes them), and deletes the install folder. Add `-RemoveData` to `Uninstall.ps1` to also delete your themes and settings. It asks before it changes anything, and `-WhatIf` shows what it would do without doing it.
 
 ## Credits
 

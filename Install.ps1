@@ -3,24 +3,47 @@ param(
     [switch]$NoBuild,
     [switch]$NoStart
 )
-# Builds (unless -NoBuild) and deploys the four exes, then restarts the three wallpaper helpers.
+# Installs the four executables lying next to this script (building them first when the source is here),
+# then restarts the three wallpaper helpers.
 $ErrorActionPreference = 'Stop'
 $package = $PSScriptRoot
-$destination = Join-Path $env:LOCALAPPDATA 'Programs\DevinAnimated'
+$destination = Join-Path $env:LOCALAPPDATA 'Programs\AnimatedLaunchers'
+$oldFolder = Join-Path $env:LOCALAPPDATA 'Programs\DevinAnimated'
 $helpers = @(
-    @{ Exe = 'DevinAnimated.exe';       Product = 'Devin Animated' },
-    @{ Exe = 'AntigravityAnimated.exe'; Product = 'Antigravity Animated' },
-    @{ Exe = 'CodexAnimated.exe';       Product = 'Codex Animated' }
+    @{ App = 'Devin';       Exe = 'DevinAnimated.exe';       Product = 'Devin Animated' },
+    @{ App = 'Antigravity'; Exe = 'AntigravityAnimated.exe'; Product = 'Antigravity Animated' },
+    @{ App = 'Codex';       Exe = 'CodexAnimated.exe';       Product = 'Codex Animated' }
 )
+
+# Whether the desktop app is on this machine. ANIMATED_INSTALL_ASSUME (a comma-separated list) overrides this for tests.
+function Test-AppInstalled([string]$app) {
+    if ($env:ANIMATED_INSTALL_ASSUME) {
+        return @($env:ANIMATED_INSTALL_ASSUME -split ',' | ForEach-Object { $_.Trim() }) -contains $app
+    }
+    if ($app -eq 'Codex') {
+        if (Test-Path -LiteralPath (Join-Path $env:LOCALAPPDATA 'Packages\OpenAI.Codex_2p2nqsd0c76g0')) { return $true }
+        try { return $null -ne (Get-AppxPackage -Name 'OpenAI.Codex' -ErrorAction Stop | Select-Object -First 1) } catch { return $false }
+    }
+    $folder = if ($app -eq 'Devin') { 'Devin' } else { 'Antigravity IDE' }
+    $exe = "$folder.exe"
+    $roots = @((Join-Path $env:LOCALAPPDATA 'Programs'), $env:ProgramFiles, ${env:ProgramFiles(x86)}) | Where-Object { $_ }
+    foreach ($root in $roots) { if (Test-Path -LiteralPath (Join-Path $root "$folder\$exe")) { return $true } }
+    try {
+        $command = (Get-ItemProperty -Path ('HKCU:\Software\Classes\' + $app.ToLowerInvariant() + '\shell\open\command') -ErrorAction Stop).'(default)'
+        if ($command -match '^\s*"([^"]+)"' -and (Test-Path -LiteralPath $Matches[1])) { return $true }
+    } catch { }
+    return $false
+}
 $exes = @($helpers | ForEach-Object { $_.Exe }) + 'ThemeStudio.exe'
 $names = $exes | ForEach-Object { [IO.Path]::GetFileNameWithoutExtension($_) }
 
-# 1. Build
-if (-not $NoBuild) {
-    & (Join-Path $package 'source\Build.ps1')
-}
+# 1. Build, when this is a source checkout
+$build = Join-Path $package 'source\Build.ps1'
+if (-not $NoBuild -and (Test-Path -LiteralPath $build)) { & $build }
 foreach ($exe in $exes) {
-    if (-not (Test-Path -LiteralPath (Join-Path $package $exe))) { throw "$exe is missing. Run without -NoBuild." }
+    if (-not (Test-Path -LiteralPath (Join-Path $package $exe))) {
+        throw "$exe is not next to Install.ps1. Extract the whole release zip first, or run this from a source checkout without -NoBuild."
+    }
 }
 
 # 2. Stop the helpers and Theme Studio
@@ -46,27 +69,72 @@ foreach ($exe in $exes) {
     $to = Join-Path $destination $exe
     Copy-Item -LiteralPath $from -Destination $to -Force
     $hash = (Get-FileHash -LiteralPath $from -Algorithm SHA256).Hash
-    if ((Get-FileHash -LiteralPath $to -Algorithm SHA256).Hash -ne $hash) { throw "Copy of $exe does not match the build." }
-    $summary += [pscustomobject]@{ File = $exe; Sha256 = $hash.Substring(0, 12); Run = ''; Pid = '' }
+    if ((Get-FileHash -LiteralPath $to -Algorithm SHA256).Hash -ne $hash) { throw "Copy of $exe does not match the original." }
+    Unblock-File -LiteralPath $to
+    $summary += [pscustomobject]@{ File = $exe; Sha256 = $hash.Substring(0, 12); Installed = ''; Run = ''; Pid = '' }
 }
 
-# 4. Regenerable bundle caches
+# 4. Move shortcuts and remove the old install folder (earlier versions installed to Programs\DevinAnimated)
+$shell = New-Object -ComObject WScript.Shell
+$shortcutRoots = @(
+    (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'),
+    [Environment]::GetFolderPath('Desktop'),
+    (Join-Path $env:APPDATA 'Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar'))
+function Test-Inside([string]$path, [string]$folder) {
+    return $path -and $path.StartsWith($folder.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)
+}
+if (Test-Path -LiteralPath $oldFolder) {
+    foreach ($root in $shortcutRoots) {
+        if (-not (Test-Path -LiteralPath $root)) { continue }
+        foreach ($file in Get-ChildItem -LiteralPath $root -Recurse -Filter *.lnk -ErrorAction SilentlyContinue) {
+            $link = $shell.CreateShortcut($file.FullName)
+            if (-not (Test-Inside $link.TargetPath $oldFolder)) { continue }
+            $before = $link.TargetPath
+            $link.TargetPath = Join-Path $destination (Split-Path -Leaf $link.TargetPath)
+            if ((Test-Inside $link.WorkingDirectory $oldFolder) -or ($link.WorkingDirectory.TrimEnd('\') -ieq $oldFolder)) { $link.WorkingDirectory = $destination }
+            $icon = $link.IconLocation
+            if ($icon) {
+                $iconPath = ($icon -split ',')[0]
+                if (Test-Inside $iconPath $oldFolder) { $link.IconLocation = (Join-Path $destination (Split-Path -Leaf $iconPath)) + ',' + (($icon -split ',')[1]) }
+            }
+            $link.Save()
+            Write-Output ("shortcut {0}: {1} -> {2}" -f $file.FullName, $before, $link.TargetPath)
+        }
+    }
+    foreach ($exe in $exes) { Remove-Item -LiteralPath (Join-Path $oldFolder $exe) -Force -ErrorAction SilentlyContinue }
+    if (@(Get-ChildItem -LiteralPath $oldFolder -Force).Count -eq 0) {
+        Remove-Item -LiteralPath $oldFolder
+        Write-Output "removed the old install folder $oldFolder"
+    }
+    else { Write-Output "left $oldFolder in place: it still contains other files" }
+}
+
+# 5. Regenerable bundle caches
 foreach ($helper in $helpers) {
     $runtime = Join-Path $env:LOCALAPPDATA "$($helper.Product)\Runtime"
     if (Test-Path -LiteralPath $runtime) { Get-ChildItem -LiteralPath $runtime -Force | Remove-Item -Recurse -Force }
 }
 
-# 5. Logon entries
+# 6. Logon entries
 $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+$active = @{}
 foreach ($helper in $helpers) {
-    $value = '"{0}" --artwork' -f (Join-Path $destination $helper.Exe)
-    Set-ItemProperty -Path $runKey -Name ([IO.Path]::GetFileNameWithoutExtension($helper.Exe)) -Value $value
-    ($summary | Where-Object { $_.File -eq $helper.Exe }).Run = $value
+    $name = [IO.Path]::GetFileNameWithoutExtension($helper.Exe)
+    $installed = Test-AppInstalled $helper.App
+    $hasValue = $null -ne (Get-ItemProperty -Path $runKey -Name $name -ErrorAction SilentlyContinue)
+    $row = $summary | Where-Object { $_.File -eq $helper.Exe }
+    $row.Installed = if ($installed) { 'yes' } else { 'no' }
+    if ($installed -or $hasValue) {
+        $value = '"{0}" --artwork' -f (Join-Path $destination $helper.Exe)
+        Set-ItemProperty -Path $runKey -Name $name -Value $value
+        $row.Run = $value
+        $active[$helper.Exe] = $true
+    }
+    else { Write-Output "skipped $($helper.App): not installed. Turn its helper on later in Theme Studio, Apps and startup." }
 }
 
-# 6. Start Menu shortcut for Theme Studio
+# 7. Start Menu shortcut for Theme Studio
 $programs = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
-$shell = New-Object -ComObject WScript.Shell
 $studio = Join-Path $destination 'ThemeStudio.exe'
 $hasShortcut = $false
 foreach ($link in Get-ChildItem -LiteralPath $programs -Recurse -Filter *.lnk -ErrorAction SilentlyContinue) {
@@ -79,7 +147,7 @@ if (-not $hasShortcut) {
     $shortcut.Save()
 }
 
-# 7. Restore library themes that are missing
+# 8. Restore library themes that are missing (only when a themes folder is next to this script)
 $library = Join-Path $env:LOCALAPPDATA 'Animated Launchers\Themes'
 $themeSource = Join-Path $package 'themes'
 if (Test-Path -LiteralPath $themeSource) {
@@ -97,13 +165,14 @@ if (Test-Path -LiteralPath $themeSource) {
     }
 }
 
-# 8. Start the helpers
+# 9. Start the helpers
 if (-not $NoStart) {
     foreach ($helper in $helpers) {
+        if (-not $active[$helper.Exe]) { continue }
         $process = Start-Process -FilePath (Join-Path $destination $helper.Exe) -ArgumentList '--artwork' -PassThru
         ($summary | Where-Object { $_.File -eq $helper.Exe }).Pid = $process.Id
     }
 }
 
-# 9. Summary
+# 10. Summary
 $summary | Format-List

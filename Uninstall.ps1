@@ -3,13 +3,21 @@ param(
     [switch]$RemoveData
 )
 # Removes the install: stops the helpers, drops the logon entries, retargets or deletes
-# shortcuts that point into the install folder, then removes the folder.
+# shortcuts that point into an install folder, then removes the folders.
 $ErrorActionPreference = 'Stop'
-$install = Join-Path $env:LOCALAPPDATA 'Programs\DevinAnimated'
+$installs = @(
+    (Join-Path $env:LOCALAPPDATA 'Programs\AnimatedLaunchers'),
+    (Join-Path $env:LOCALAPPDATA 'Programs\DevinAnimated'))
 $names = 'DevinAnimated', 'AntigravityAnimated', 'CodexAnimated', 'ThemeStudio'
 $native = @{
     'DevinAnimated.exe'       = Join-Path $env:LOCALAPPDATA 'Programs\Devin\Devin.exe'
     'AntigravityAnimated.exe' = Join-Path $env:LOCALAPPDATA 'Programs\Antigravity IDE\Antigravity IDE.exe'
+}
+function Test-Inside([string]$path) {
+    foreach ($folder in $installs) {
+        if ($path -and $path.StartsWith($folder.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) { return $true }
+    }
+    return $false
 }
 
 foreach ($process in @(Get-Process -Name $names -ErrorAction SilentlyContinue)) {
@@ -36,7 +44,7 @@ foreach ($root in $roots) {
     if (-not (Test-Path -LiteralPath $root)) { continue }
     foreach ($file in Get-ChildItem -LiteralPath $root -Recurse -Filter *.lnk -ErrorAction SilentlyContinue) {
         $link = $shell.CreateShortcut($file.FullName)
-        if (-not $link.TargetPath.StartsWith($install, [StringComparison]::OrdinalIgnoreCase)) { continue }
+        if (-not (Test-Inside $link.TargetPath)) { continue }
         $replacement = $native[[IO.Path]::GetFileName($link.TargetPath)]
         if ($replacement -and (Test-Path -LiteralPath $replacement)) {
             if ($PSCmdlet.ShouldProcess($file.FullName, "retarget to $replacement")) {
@@ -52,8 +60,10 @@ foreach ($root in $roots) {
     }
 }
 
-if ((Test-Path -LiteralPath $install) -and $PSCmdlet.ShouldProcess($install, 'remove install folder')) {
-    Remove-Item -LiteralPath $install -Recurse -Force
+foreach ($install in $installs) {
+    if ((Test-Path -LiteralPath $install) -and $PSCmdlet.ShouldProcess($install, 'remove install folder')) {
+        Remove-Item -LiteralPath $install -Recurse -Force
+    }
 }
 
 if ($RemoveData) {

@@ -47,8 +47,6 @@
 
   document.querySelectorAll('.boot-logs div').forEach(line => { if (!line.textContent.trim()) line.remove(); });
   if (!$('#subtitle').textContent.trim()) subtitle.style.display = 'none';
-  const nowShowing = $('.now-showing');
-  if (nowShowing && !nowShowing.textContent.trim()) nowShowing.textContent = nowShowing.dataset.fallback || '';
   let lineColor = '#c8c0cd';
   function prepareLineColor() {
     const m = /^#([0-9a-f]{6})$/i.exec(getComputedStyle(root).getPropertyValue('--accent').trim());

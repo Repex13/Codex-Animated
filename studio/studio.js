@@ -158,6 +158,17 @@
     return row;
   }
 
+  function customColor(label, value, selected, onInput, onChange) {
+    const input = h('input', { type: 'color', 'aria-label': label, value: /^#[0-9a-f]{6}$/i.test(value) ? value.toLowerCase() : '#d980a7' });
+    input.addEventListener('input', () => onInput(input.value.toUpperCase()));
+    input.addEventListener('change', onChange);
+    return h('span', { class: 'swatch custom', 'aria-pressed': String(selected) }, glyph(0xE790), input);
+  }
+
+  function swatchButton(hex, label, pressed, onClick) {
+    return h('button', { type: 'button', class: 'swatch', style: `background:${hex}`, 'aria-label': `${label} ${hex}`, 'aria-pressed': String(pressed), onclick: onClick });
+  }
+
   // ---------- rail ----------
   function renderRail() {
     const list = ui.list;
@@ -245,11 +256,10 @@
     ui.stageSwitch = stageSwitch;
     ui.head = renderCanvasHead(t);
     ui.status = h('div', { class: 'status', role: 'status', 'aria-live': 'polite' });
-    ui.help = h('p', { class: 'cv-help', text: 'Drag to choose what stays in view. Text is enlarged here; apps using this theme update as you edit.' });
     ui.foot = h('div', { class: 'cv-foot' });
     buildStage(t);
     renderFoot();
-    return h('main', { class: 'canvas' }, ui.head, h('div', { class: 'cv-tools' }, stageSwitch), ui.stageWrap, ui.help, ui.foot);
+    return h('main', { class: 'canvas' }, ui.head, h('div', { class: 'cv-tools' }, stageSwitch), ui.stageWrap, ui.foot);
   }
 
   function renderFoot() {
@@ -300,7 +310,8 @@
     ui.art = h('img', { class: 'art', alt: '' });
     ui.frame = null;
     ui.stage = h('div', { class: 'stage', tabindex: '0', 'aria-label': 'Preview. Drag or use the arrow keys to choose what stays in view.' }, ui.mock, ui.art);
-    ui.stageWrap = h('div', { class: 'stage-wrap' }, ui.stage);
+    ui.bar = h('div', { class: 'stage-bar' });
+    ui.stageWrap = h('div', { class: 'stage-wrap' }, ui.stage, ui.bar);
     wireDrag();
     ui.shown = ''; ui.inflight = false;
     updateArt(t, true);
@@ -342,8 +353,10 @@
     const wrap = ui.stageWrap; if (!wrap || !wrap.isConnected) return;
     const box = wrap.getBoundingClientRect();
     const aspect = S.stage === 'splash' ? 3 / 2 : S.screen.w / S.screen.h;
-    const width = Math.max(100, Math.min(box.width, box.height * aspect));
+    const barH = ui.bar.offsetHeight + 10;
+    const width = Math.max(100, Math.min(box.width, (box.height - barH) * aspect));
     const height = width / aspect;
+    ui.bar.style.width = `${Math.round(width)}px`;
     ui.stage.style.width = `${Math.round(width)}px`;
     ui.stage.style.height = `${Math.round(height)}px`;
     const mockH = Math.round(MOCK_W * S.screen.h / S.screen.w);
@@ -409,7 +422,7 @@
     const splash = S.stage === 'splash';
     ui.mock.hidden = splash;
     ui.art.hidden = splash || !ui.art.getAttribute('src');
-    ui.help.style.visibility = splash ? 'hidden' : 'visible';
+    renderBar(splash);
     if (splash) {
       if (!ui.frame && !ui.placeholder) {
         const url = splashUrl(cur().name, cur().stamp, S.still);
@@ -427,6 +440,12 @@
     if (ui.frame) ui.frame.hidden = !splash;
     if (ui.placeholder) ui.placeholder.hidden = !splash;
     layoutStage();
+  }
+
+  function renderBar(splash) {
+    ui.bar.textContent = '';
+    if (splash) ui.bar.append(button('Play', 'primary', play, 0xE768), button('Play full size', 'quiet', playFull, 0xE740));
+    else ui.bar.append(h('p', { class: 'cv-help', text: 'Drag to choose what stays in view. Text is enlarged here; apps using this theme update as you edit.' }));
   }
 
   function reloadFrame() {
@@ -512,12 +531,10 @@
     const inList = shown.some(s => s.toUpperCase() === current);
     const list = h('div', { class: 'swatches' });
     const pick = hex => { t.text.accent = hex; applyAccent(); onEdit('text'); refreshAccent(); };
-    for (const hex of shown)
-      list.append(h('button', { type: 'button', class: 'swatch', style: `background:${hex}`, 'aria-label': `Accent ${hex}`, 'aria-pressed': String(hex.toUpperCase() === current), onclick: () => pick(hex) }));
-    const custom = h('input', { type: 'color', class: 'swatch', 'aria-label': 'Custom accent', 'aria-pressed': String(!inList && !!current), value: /^#[0-9a-f]{6}$/i.test(current) ? current.toLowerCase() : '#d980a7' });
-    custom.addEventListener('input', () => { t.text.accent = custom.value.toUpperCase(); applyAccent(); onEdit('text'); });
-    custom.addEventListener('change', () => refreshAccent());
-    list.append(custom);
+    for (const hex of shown) list.append(swatchButton(hex, 'Accent', hex.toUpperCase() === current, () => pick(hex)));
+    if (!inList && /^#[0-9a-f]{6}$/i.test(current)) list.append(swatchButton(current, 'Accent', true, () => pick(current)));
+    list.append(customColor('Custom accent', current, false,
+      hex => { t.text.accent = hex; applyAccent(); onEdit('text'); }, () => refreshAccent()));
     return h('div', { class: 'field' }, h('span', { class: 'label', text: 'Accent' }), list);
   }
 
@@ -526,12 +543,10 @@
     const current = (t.look.tintColor || '').toUpperCase();
     const inList = TINTS.some(c => c.toUpperCase() === current);
     const pick = hex => { t.look.tintColor = hex.toUpperCase(); onEdit('look'); refreshTints(); };
-    for (const hex of TINTS)
-      list.append(h('button', { type: 'button', class: 'swatch', style: `background:${hex}`, 'aria-label': `Tint color ${hex}`, 'aria-pressed': String(hex.toUpperCase() === current), onclick: () => pick(hex) }));
-    const custom = h('input', { type: 'color', class: 'swatch', 'aria-label': 'Custom tint color', 'aria-pressed': String(!inList), value: current.toLowerCase() });
-    custom.addEventListener('input', () => { t.look.tintColor = custom.value.toUpperCase(); onEdit('look'); });
-    custom.addEventListener('change', () => refreshTints());
-    list.append(custom);
+    for (const hex of TINTS) list.append(swatchButton(hex, 'Tint color', hex.toUpperCase() === current, () => pick(hex)));
+    if (!inList && /^#[0-9a-f]{6}$/i.test(current)) list.append(swatchButton(current, 'Tint color', true, () => pick(current)));
+    list.append(customColor('Custom tint color', current, false,
+      hex => { t.look.tintColor = hex; onEdit('look'); }, () => refreshTints()));
     return h('div', { class: 'field' }, h('span', { class: 'label', text: 'Tint color' }), list);
   }
 
@@ -579,8 +594,7 @@
     const startup = h('section', { class: 'group', id: 'g-startup' }, h('h3', { text: 'Startup animation' }),
       h('div', { class: 'field' }, h('span', { class: 'label', text: 'Title' }), title),
       h('div', { class: 'field' }, h('span', { class: 'label', text: 'Subtitle' }), subtitle),
-      ui.accentBox, avatar, boot,
-      h('div', { class: 'play-row' }, button('Play', 'primary', play, 0xE768), button('Play full size', 'quiet', playFull, 0xE740)));
+      ui.accentBox, avatar, boot);
     startup.addEventListener('focusin', () => setStage('splash'));
     refreshPresets();
     return h('aside', { class: 'inspector' }, wallpaper, startup);
@@ -623,7 +637,7 @@
         call('setApp', { app: app.id, speed: +v }).then(apps => { S.apps = apps; speed.paint(v); }).catch(e => setAppsStatus(`Couldn't save. ${e.message}`, true)));
       const auto = toggle(app.autostart, `Start helper with Windows for ${app.name}`, on =>
         call('setAutostart', { app: app.id, on }).then(apps => { S.apps = apps; }).catch(e => setAppsStatus(`Couldn't save. ${e.message}`, true)));
-      const ctl = (label, el) => h('div', { class: 'ctl' }, h('span', { class: 'label', text: label }), el);
+      const ctl = (label, el) => h('div', { class: 'ctl' }, h('span', { class: 'label', text: label }), h('div', { class: 'ctl-row' }, el));
       wrap.append(h('section', { class: 'app-block', 'data-app': app.id }, line1,
         h('div', { class: 'app-controls' }, ctl('Theme', select), ctl('Play animation on start', splash), ctl('Speed', speed), ctl('Start helper with Windows', auto))));
     }
@@ -653,8 +667,10 @@
   }
 
   // ---------- build ----------
+  let firstBuild = true;
   function buildAll() {
     const app = $('#app');
+    app.tabIndex = -1;
     app.textContent = '';
     const t = cur();
     const empty = !S.themes.length;
@@ -709,6 +725,7 @@
       if (hash.view === 'apps') S.view = 'apps';
       if (hash.stage === 'splash') S.stage = 'splash';
       buildAll();
+      if (firstBuild) { firstBuild = false; $('#app').focus({ preventScroll: true }); }
     }).catch(e => { $('#app').textContent = `Theme Studio couldn't load its themes. ${e.message}`; });
   }
   window.__studio = { call, state: S, select: selectTheme, edit: onEdit, flush: flushSave, play, setStage };
