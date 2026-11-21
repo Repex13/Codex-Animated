@@ -17,7 +17,8 @@ try {
     $targets = @(
         @{ Define = 'APP_DEVIN';       Out = 'DevinAnimated.exe';       Identity = 'DevinAnimated';       Icon = 'source\launcher.ico' },
         @{ Define = 'APP_ANTIGRAVITY'; Out = 'AntigravityAnimated.exe'; Identity = 'AntigravityAnimated'; Icon = 'source\launcher.ico' },
-        @{ Define = 'APP_CODEX';       Out = 'CodexAnimated.exe';       Identity = 'CodexAnimated';       Icon = 'source\codex.ico' }
+        @{ Define = 'APP_CODEX';       Out = 'CodexAnimated.exe';       Identity = 'CodexAnimated';       Icon = 'source\codex.ico' },
+        @{ Define = 'APP_CLAUDE';      Out = 'ClaudeAnimated.exe';      Identity = 'ClaudeAnimated';      Icon = 'source\launcher.ico' }
     )
     foreach ($target in $targets) {
         $manifest = Join-Path $env:TEMP ($target.Identity + '.manifest')

@@ -1,15 +1,15 @@
 # Animated Launchers for Windows
 
-This project builds one animated launcher per supported app — `DevinAnimated.exe`, `AntigravityAnimated.exe`, and `CodexAnimated.exe` — plus `ThemeStudio.exe`, a small studio for editing themes. A theme is a wallpaper with a look (visibility, blur, dim, tint, and which part of the image stays in view) and the text of the 12-second startup animation (title, subtitle, accent color, and boot lines). All three apps share one theme library. Each app's helper plays the animation when the app starts and keeps the artwork visible inside the app window, its taskbar hover thumbnail, and its Alt+Tab card.
+This project builds one animated launcher per supported app — `DevinAnimated.exe`, `AntigravityAnimated.exe`, `CodexAnimated.exe`, and `ClaudeAnimated.exe` — plus `ThemeStudio.exe`, a small studio for editing themes. A theme is a wallpaper with a look (visibility, blur, dim, tint, and which part of the image stays in view) and the text of the 12-second startup animation (title, subtitle, accent color, and boot lines). All supported apps share one theme library. Each app's helper plays the animation when the app starts and keeps the artwork visible inside the app window, its taskbar hover thumbnail, and its Alt+Tab card.
 
 ![A silhouetted girl and birds by the water, with a city skyline under a pink and violet sunset](web/assets/artwork.jpg)
 
 ## Install and launch
 
-You'll need 64-bit Windows (x64), at least one of the supported apps (Devin, Antigravity IDE, or Codex), and Microsoft Edge WebView2 Evergreen Runtime for the animation. [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/#download)
+You'll need 64-bit Windows (x64), at least one of the supported apps (Devin, Antigravity IDE, Codex, or Claude), and Microsoft Edge WebView2 Evergreen Runtime for the animation. [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/#download)
 
 1. Download the latest `Codex-Animated-v…-windows-x64.zip` from [Releases](https://github.com/Synaap/Codex-Animated/releases) and extract it anywhere.
-2. Double-click `Install.cmd`. It copies the four executables to `%LOCALAPPDATA%\Programs\AnimatedLaunchers`, sets up the helper of each supported app it finds (the helper starts with Windows and starts now), clears the downloaded-file mark from its installed copies so Windows does not ask again at every sign-in, and adds a Start menu shortcut for Theme Studio. To turn on another app's helper later, use Theme Studio under **Apps and startup**. If you installed an earlier version, it also moves your shortcuts to the new folder.
+2. Double-click `Install.cmd`. It copies the five executables to `%LOCALAPPDATA%\Programs\AnimatedLaunchers`, sets up the helper of each supported app it finds (the helper starts with Windows and starts now), clears the downloaded-file mark from its installed copies so Windows does not ask again at every sign-in, and adds a Start menu shortcut for Theme Studio. To turn on another app's helper later, use Theme Studio under **Apps and startup**. If you installed an earlier version, it also moves your shortcuts to the new folder.
 
 From a clone of this repository, `Install.cmd` builds the executables first and then does the same.
 
@@ -40,7 +40,7 @@ While the artwork is visible, maximize and restore are instant for that window. 
 
 ## How it works
 
-The helper watches for the app's window. When the app starts, the helper plays the animation, which it loads from local files in its own WebView2 session. A launcher opens the app — `Devin.exe` or `Antigravity IDE.exe` from the local install (resolved from the standard install folders and the registered protocol), or Codex through its Microsoft Store app identity — and plays the same animation. The helper attaches the artwork through Windows window-management APIs; it verifies the window belongs to the real app — the executable path for Devin and Antigravity, the package family `OpenAI.Codex_2p2nqsd0c76g0` for Codex — before attaching. Everything runs locally as your Windows user, leaves the app installations intact, and opens no debugging port.
+The helper watches for the app's window. When the app starts, the helper plays the animation, which it loads from local files in its own WebView2 session. A launcher opens the app — `Devin.exe` or `Antigravity IDE.exe` from the local install (resolved from the standard install folders and the registered protocol), Claude through the `claude.exe` that Anthropic's standard Windows installer puts in `%LOCALAPPDATA%\AnthropicClaude`, or Codex through its Microsoft Store app identity — and plays the same animation. The helper attaches the artwork through Windows window-management APIs; it verifies the window belongs to the real app — the executable path for Devin and Antigravity, a `claude.exe` inside the `AnthropicClaude` install folder for Claude (so the Claude Code command-line tool is never matched), the package family `OpenAI.Codex_2p2nqsd0c76g0` for Codex — before attaching. Everything runs locally as your Windows user, leaves the app installations intact, and opens no debugging port.
 
 ## Where data lives
 
@@ -56,7 +56,7 @@ Clone this repository or download the source archive. Open PowerShell in the rep
 .\source\Build.ps1
 ```
 
-The script uses the 64-bit .NET Framework C# compiler and the WebView2 SDK DLLs included in the repository. It writes four executables — `DevinAnimated.exe`, `AntigravityAnimated.exe`, `CodexAnimated.exe`, and `ThemeStudio.exe` — to the same folder as `web`. Each launcher is compiled from the same sources with a per-app `APP_*` define selected in `source/AppTarget.cs`. To change the animation itself, edit the files in `web` and rebuild. The Theme Studio page is in `studio`.
+The script uses the 64-bit .NET Framework C# compiler and the WebView2 SDK DLLs included in the repository. It writes five executables — `DevinAnimated.exe`, `AntigravityAnimated.exe`, `CodexAnimated.exe`, `ClaudeAnimated.exe`, and `ThemeStudio.exe` — to the same folder as `web`. Each launcher is compiled from the same sources with a per-app `APP_*` define selected in `source/AppTarget.cs`. To change the animation itself, edit the files in `web` and rebuild. The Theme Studio page is in `studio`.
 
 `.\tools\Test.ps1` builds and runs the offline tests for the look and theme logic. `.\tools\Package.ps1` builds and writes the release zip and its checksum to `dist`.
 

@@ -3,8 +3,8 @@ param(
     [switch]$NoBuild,
     [switch]$NoStart
 )
-# Installs the four executables lying next to this script (building them first when the source is here),
-# then restarts the three wallpaper helpers.
+# Installs the executables lying next to this script (building them first when the source is here),
+# then restarts the wallpaper helper of each app that is installed.
 $ErrorActionPreference = 'Stop'
 $package = $PSScriptRoot
 $destination = Join-Path $env:LOCALAPPDATA 'Programs\AnimatedLaunchers'
@@ -12,7 +12,8 @@ $oldFolder = Join-Path $env:LOCALAPPDATA 'Programs\DevinAnimated'
 $helpers = @(
     @{ App = 'Devin';       Exe = 'DevinAnimated.exe';       Product = 'Devin Animated' },
     @{ App = 'Antigravity'; Exe = 'AntigravityAnimated.exe'; Product = 'Antigravity Animated' },
-    @{ App = 'Codex';       Exe = 'CodexAnimated.exe';       Product = 'Codex Animated' }
+    @{ App = 'Codex';       Exe = 'CodexAnimated.exe';       Product = 'Codex Animated' },
+    @{ App = 'Claude';      Exe = 'ClaudeAnimated.exe';      Product = 'Claude Animated' }
 )
 
 # Whether the desktop app is on this machine. ANIMATED_INSTALL_ASSUME (a comma-separated list) overrides this for tests.
@@ -23,6 +24,16 @@ function Test-AppInstalled([string]$app) {
     if ($app -eq 'Codex') {
         if (Test-Path -LiteralPath (Join-Path $env:LOCALAPPDATA 'Packages\OpenAI.Codex_2p2nqsd0c76g0')) { return $true }
         try { return $null -ne (Get-AppxPackage -Name 'OpenAI.Codex' -ErrorAction Stop | Select-Object -First 1) } catch { return $false }
+    }
+    if ($app -eq 'Claude') {
+        $claudeRoot = Join-Path $env:LOCALAPPDATA 'AnthropicClaude'
+        if (Test-Path -LiteralPath (Join-Path $claudeRoot 'claude.exe')) { return $true }
+        if (@(Get-ChildItem -Path (Join-Path $claudeRoot 'app-*\claude.exe') -ErrorAction SilentlyContinue).Count -gt 0) { return $true }
+        try {
+            $command = (Get-ItemProperty -Path 'HKCU:\Software\Classes\claude\shell\open\command' -ErrorAction Stop).'(default)'
+            if ($command -match '^\s*"([^"]+)"' -and (Test-Path -LiteralPath $Matches[1])) { return $true }
+        } catch { }
+        return $false
     }
     $folder = if ($app -eq 'Devin') { 'Devin' } else { 'Antigravity IDE' }
     $exe = "$folder.exe"

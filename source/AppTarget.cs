@@ -6,11 +6,13 @@ using System.Runtime.InteropServices;
 using System.Text;
 
 // Resolves the target desktop application. Devin and Antigravity are regular
-// per-user Electron installs; Codex is a Microsoft Store package activated
+// per-user Electron installs; Claude is a Squirrel-style per-user install with a
+// versioned app-<version> folder; Codex is a Microsoft Store package activated
 // through its AUMID. Build.ps1 compiles one helper per target:
 //   /define:APP_DEVIN /out:DevinAnimated.exe
 //   /define:APP_ANTIGRAVITY /out:AntigravityAnimated.exe
 //   /define:APP_CODEX /out:CodexAnimated.exe
+//   /define:APP_CLAUDE /out:ClaudeAnimated.exe
 internal static class AppTarget
 {
 #if APP_DEVIN
@@ -27,6 +29,13 @@ internal static class AppTarget
     private const string ExecutableName = "Antigravity IDE.exe";
     private const string InstallFolder = "Antigravity IDE";
     private const string Scheme = "antigravity";
+#elif APP_CLAUDE
+    internal const string Name = "Claude";
+    internal const string Product = "Claude Animated";
+    internal const string HelperName = "ClaudeAnimated";
+    private const string ExecutableName = "claude.exe";
+    private const string InstallFolder = "AnthropicClaude";
+    private const string Scheme = "claude";
 #elif APP_CODEX
     internal const string Name = "Codex";
     internal const string Product = "Codex Animated";
@@ -35,7 +44,7 @@ internal static class AppTarget
     private const string Aumid = PackageFamily + "!App";
     private static readonly string[] StoreImageNames = { "ChatGPT.exe", "Codex.exe" };
 #else
-#error Define one of APP_DEVIN, APP_ANTIGRAVITY, APP_CODEX.
+#error Define one of APP_DEVIN, APP_ANTIGRAVITY, APP_CLAUDE, APP_CODEX.
 #endif
     private static volatile string[] directories;
 
@@ -77,6 +86,38 @@ internal static class AppTarget
     {
 #if APP_CODEX
         return null;
+#elif APP_CLAUDE
+        // The stub at the root starts the newest version; fall back to the highest app-<version> folder.
+        foreach (string directory in Directories)
+        {
+            string stub = Path.Combine(directory, ExecutableName);
+            if (File.Exists(stub)) return stub;
+        }
+        string best = null;
+        Version bestVersion = null;
+        string bestText = null;
+        foreach (string directory in Directories)
+        {
+            string[] folders;
+            try { folders = Directory.GetDirectories(directory, "app-*"); }
+            catch (IOException) { continue; }
+            catch (UnauthorizedAccessException) { continue; }
+            foreach (string folder in folders)
+            {
+                string exe = Path.Combine(folder, ExecutableName);
+                if (!File.Exists(exe)) continue;
+                string text = Path.GetFileName(folder).Substring(4);
+                Version version;
+                bool parsed = Version.TryParse(text, out version);
+                bool better;
+                if (best == null) better = true;
+                else if (parsed && bestVersion != null) better = version > bestVersion;
+                else if (parsed != (bestVersion != null)) better = parsed;
+                else better = string.CompareOrdinal(text, bestText) > 0;
+                if (better) { best = exe; bestVersion = parsed ? version : null; bestText = text; }
+            }
+        }
+        return best;
 #else
         foreach (string directory in Directories)
         {
@@ -95,6 +136,23 @@ internal static class AppTarget
         foreach (string allowed in StoreImageNames)
             if (string.Equals(file, allowed, StringComparison.OrdinalIgnoreCase))
                 return imagePath.IndexOf("OpenAI.Codex_", StringComparison.OrdinalIgnoreCase) >= 0;
+        return false;
+#elif APP_CLAUDE
+        // claude.exe in an install root or in an app-<version> folder directly under one. Checked on every
+        // call, so a folder created by an update while the helper runs is accepted. Other programs that are
+        // also called claude.exe (the command-line tool) live elsewhere and never match.
+        if (!string.Equals(Path.GetFileName(imagePath), ExecutableName, StringComparison.OrdinalIgnoreCase))
+            return false;
+        string directory = Path.GetDirectoryName(imagePath);
+        if (string.IsNullOrEmpty(directory)) return false;
+        string parent = null;
+        if (Path.GetFileName(directory).StartsWith("app-", StringComparison.OrdinalIgnoreCase))
+            parent = Path.GetDirectoryName(directory);
+        foreach (string candidate in Directories)
+        {
+            if (string.Equals(candidate, directory, StringComparison.OrdinalIgnoreCase)) return true;
+            if (parent != null && string.Equals(candidate, parent, StringComparison.OrdinalIgnoreCase)) return true;
+        }
         return false;
 #else
         if (!string.Equals(Path.GetFileName(imagePath), ExecutableName, StringComparison.OrdinalIgnoreCase))
@@ -210,7 +268,10 @@ internal static class AppTarget
     private static string[] Probe()
     {
         var list = new List<string>();
-#if !APP_CODEX
+#if APP_CLAUDE
+        Add(list, Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), InstallFolder));
+        Add(list, RegisteredCommandDirectory());
+#elif !APP_CODEX
         Add(list, Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "Programs", InstallFolder));
         foreach (string variable in new[] { "ProgramFiles", "ProgramFiles(x86)", "ProgramW6432" })
@@ -240,7 +301,12 @@ internal static class AppTarget
                 if (string.IsNullOrEmpty(command) || command[0] != '"') return null;
                 int end = command.IndexOf('"', 1);
                 if (end <= 1) return null;
-                return Path.GetDirectoryName(command.Substring(1, end - 1));
+                string folder = Path.GetDirectoryName(command.Substring(1, end - 1));
+#if APP_CLAUDE
+                if (folder != null && Path.GetFileName(folder).StartsWith("app-", StringComparison.OrdinalIgnoreCase))
+                    folder = Path.GetDirectoryName(folder);
+#endif
+                return folder;
             }
         }
         catch (Exception error)

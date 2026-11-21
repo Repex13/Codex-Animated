@@ -21,13 +21,17 @@ using Microsoft.Web.WebView2.WinForms;
 [assembly: AssemblyTitle("Antigravity Animated")]
 [assembly: AssemblyProduct("Antigravity Animated")]
 [assembly: AssemblyDescription("Windows launcher with the startup animation and wallpaper for Antigravity")]
+#elif APP_CLAUDE
+[assembly: AssemblyTitle("Claude Animated")]
+[assembly: AssemblyProduct("Claude Animated")]
+[assembly: AssemblyDescription("Windows launcher with the startup animation and wallpaper for Claude")]
 #elif APP_CODEX
 [assembly: AssemblyTitle("Codex Animated")]
 [assembly: AssemblyProduct("Codex Animated")]
 [assembly: AssemblyDescription("Windows launcher with the startup animation and wallpaper for Codex")]
 #endif
-[assembly: AssemblyVersion("2.0.0.0")]
-[assembly: AssemblyFileVersion("2.0.0.0")]
+[assembly: AssemblyVersion("2.1.0.0")]
+[assembly: AssemblyFileVersion("2.1.0.0")]
 
 internal static class Launcher
 {

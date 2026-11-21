@@ -16,7 +16,7 @@ if (-not $Version) {
 }
 if (-not $NoBuild) { & (Join-Path $package 'source\Build.ps1') }
 
-$entries = 'DevinAnimated.exe', 'AntigravityAnimated.exe', 'CodexAnimated.exe', 'ThemeStudio.exe',
+$entries = 'DevinAnimated.exe', 'AntigravityAnimated.exe', 'CodexAnimated.exe', 'ClaudeAnimated.exe', 'ThemeStudio.exe',
     'Install.cmd', 'Install.ps1', 'Uninstall.cmd', 'Uninstall.ps1', 'README.md',
     'notices/LICENSE.txt', 'notices/NOTICE.txt'
 foreach ($entry in $entries) {

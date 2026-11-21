@@ -8,10 +8,11 @@ $ErrorActionPreference = 'Stop'
 $installs = @(
     (Join-Path $env:LOCALAPPDATA 'Programs\AnimatedLaunchers'),
     (Join-Path $env:LOCALAPPDATA 'Programs\DevinAnimated'))
-$names = 'DevinAnimated', 'AntigravityAnimated', 'CodexAnimated', 'ThemeStudio'
+$names = 'DevinAnimated', 'AntigravityAnimated', 'CodexAnimated', 'ClaudeAnimated', 'ThemeStudio'
 $native = @{
     'DevinAnimated.exe'       = Join-Path $env:LOCALAPPDATA 'Programs\Devin\Devin.exe'
     'AntigravityAnimated.exe' = Join-Path $env:LOCALAPPDATA 'Programs\Antigravity IDE\Antigravity IDE.exe'
+    'ClaudeAnimated.exe'      = Join-Path $env:LOCALAPPDATA 'AnthropicClaude\claude.exe'
 }
 function Test-Inside([string]$path) {
     foreach ($folder in $installs) {
@@ -27,7 +28,7 @@ foreach ($process in @(Get-Process -Name $names -ErrorAction SilentlyContinue)) 
 }
 
 $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
-foreach ($name in 'DevinAnimated', 'AntigravityAnimated', 'CodexAnimated') {
+foreach ($name in 'DevinAnimated', 'AntigravityAnimated', 'CodexAnimated', 'ClaudeAnimated') {
     if ($null -ne (Get-ItemProperty -Path $runKey -Name $name -ErrorAction SilentlyContinue)) {
         if ($PSCmdlet.ShouldProcess("$runKey\$name", 'remove Run value')) {
             Remove-ItemProperty -Path $runKey -Name $name
@@ -67,7 +68,7 @@ foreach ($install in $installs) {
 }
 
 if ($RemoveData) {
-    $folders = 'Devin Animated', 'Antigravity Animated', 'Codex Animated', 'Animated Launchers' |
+    $folders = 'Devin Animated', 'Antigravity Animated', 'Codex Animated', 'Claude Animated', 'Animated Launchers' |
         ForEach-Object { Join-Path $env:LOCALAPPDATA $_ }
     foreach ($folder in $folders) {
         if ((Test-Path -LiteralPath $folder) -and $PSCmdlet.ShouldProcess($folder, 'remove data folder')) {

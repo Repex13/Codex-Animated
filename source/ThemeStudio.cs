@@ -20,8 +20,8 @@ using Microsoft.Web.WebView2.WinForms;
 [assembly: AssemblyTitle("Theme Studio")]
 [assembly: AssemblyProduct("Theme Studio")]
 [assembly: AssemblyDescription("Theme library and look editor for the Animated launchers")]
-[assembly: AssemblyVersion("2.0.0.0")]
-[assembly: AssemblyFileVersion("2.0.0.0")]
+[assembly: AssemblyVersion("2.1.0.0")]
+[assembly: AssemblyFileVersion("2.1.0.0")]
 
 internal static class ThemeStudioProgram
 {
@@ -100,7 +100,7 @@ internal sealed class StudioForm : Form
 {
     private const string Origin = "https://studio.invalid/";
     private const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
-    private static readonly StudioApp[] Apps = { new StudioApp("devin", "Devin"), new StudioApp("antigravity", "Antigravity"), new StudioApp("codex", "Codex") };
+    private static readonly StudioApp[] Apps = { new StudioApp("devin", "Devin"), new StudioApp("antigravity", "Antigravity"), new StudioApp("codex", "Codex"), new StudioApp("claude", "Claude") };
     private static readonly string[] Commands = {
         "state", "saveTheme", "applyTheme", "createTheme", "renameTheme", "deleteTheme", "replaceWallpaper",
         "setAvatar", "clearAvatar", "setApp", "setAutostart", "startHelper", "playSplash" };

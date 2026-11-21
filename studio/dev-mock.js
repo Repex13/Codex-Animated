@@ -18,7 +18,8 @@
   const apps = [
     { id: 'devin', name: 'Devin', theme: 'Sunset harbor', splash: true, speed: 1, helperExists: true, helperRunning: true, autostart: true },
     { id: 'antigravity', name: 'Antigravity', theme: 'Glass garden', splash: true, speed: 1, helperExists: true, helperRunning: false, autostart: true },
-    { id: 'codex', name: 'Codex', theme: 'Glass garden', splash: false, speed: 2, helperExists: false, helperRunning: false, autostart: false }
+    { id: 'codex', name: 'Codex', theme: 'Glass garden', splash: false, speed: 2, helperExists: false, helperRunning: false, autostart: false },
+    { id: 'claude', name: 'Claude', theme: 'Paper cranes', splash: true, speed: 1, helperExists: true, helperRunning: true, autostart: false }
   ];
   const listeners = [];
   const state = () => JSON.parse(JSON.stringify({ themes, apps, screen: { w: 2560, h: 1440 } }));
