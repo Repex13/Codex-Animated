@@ -53,7 +53,7 @@ foreach ($exe in $exes) {
 # 4. Regenerable bundle caches
 foreach ($helper in $helpers) {
     $runtime = Join-Path $env:LOCALAPPDATA "$($helper.Product)\Runtime"
-    if (Test-Path -LiteralPath $runtime) { Remove-Item -LiteralPath (Join-Path $runtime '*') -Recurse -Force }
+    if (Test-Path -LiteralPath $runtime) { Get-ChildItem -LiteralPath $runtime -Force | Remove-Item -Recurse -Force }
 }
 
 # 5. Logon entries

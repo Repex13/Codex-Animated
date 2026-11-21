@@ -48,6 +48,15 @@ internal sealed class WallpaperSettings
 
     internal Bitmap LoadBitmap() { return LoadSelected(ImageCodec.DecodeJpeg); }
 
+    // Throws instead of falling back to the bundled artwork when the saved wallpaper cannot be read.
+    internal Bitmap LoadBitmapStrict()
+    {
+        if (!HasCustomWallpaper) return ImageCodec.DecodeJpeg(ImageCodec.ReadBytes(bundledPath));
+        byte[] saved = null;
+        ThemeLibrary.WithLock(settingsDirectory, delegate { saved = ImageCodec.ReadBytes(customPath); });
+        return ImageCodec.DecodeJpeg(saved);
+    }
+
     internal byte[] LoadJpeg()
     {
         return LoadSelected(delegate(byte[] bytes) {

@@ -19,6 +19,7 @@ internal static class LookTests
             return 0;
         }
         if (args.Length == 1 && args[0] == "--sheets") return Sheets();
+        if (args.Length == 4 && args[0] == "--render-splash") return RenderSplash(args[1], args[2], args[3]);
         if (args.Length == 3 && args[0] == "--codepoints")
         {
             string value = IniFile.Load(args[1]).Get(args[2]) ?? "";
@@ -37,6 +38,7 @@ internal static class LookTests
         DimCase();
         BlurResolutionIndependent();
         BlurKeepsBorder();
+        BlurCurve();
         CoverSourceCases();
         AccentCases();
         ApplyCase();
@@ -295,6 +297,46 @@ internal static class LookTests
         }
     }
 
+    private static Bitmap Detailed(int w, int h, int seed)
+    {
+        var random = new Random(seed);
+        var bitmap = new Bitmap(w, h, PixelFormat.Format24bppRgb);
+        using (var g = Graphics.FromImage(bitmap))
+        {
+            g.Clear(Color.FromArgb(40, 60, 90));
+            for (int i = 0; i < 350; i++)
+                using (var brush = new SolidBrush(Color.FromArgb(random.Next(256), random.Next(256), random.Next(256))))
+                    g.FillRectangle(brush, random.Next(w), random.Next(h), 4 + random.Next(w / 25), 4 + random.Next(w / 25));
+            using (var pen = new Pen(Color.White, 1f))
+                for (int i = 0; i < 250; i++)
+                    g.DrawLine(pen, random.Next(w), random.Next(h), random.Next(w), random.Next(h));
+        }
+        return bitmap;
+    }
+
+    private static void BlurCurve()
+    {
+        using (Bitmap image = Detailed(960, 600, 9))
+        {
+            double previous = 0;
+            bool growing = true;
+            string trail = "";
+            double first = 0;
+            foreach (int blur in new[] { 6, 12, 20, 35, 60 })
+                using (Bitmap result = ArtworkLook.Render(image, new Look { Blur = blur }))
+                {
+                    double difference = MeanDifference(result, image);
+                    if (blur == 6) first = difference;
+                    if (!(difference > previous)) growing = false;
+                    previous = difference;
+                    trail += blur + ":" + difference.ToString("0.00") + " ";
+                }
+            Console.WriteLine("     measured: mean difference by blur " + trail);
+            Check("blur curve: blur=6 already differs from the unblurred image by more than 0.3", first > 0.3, first.ToString("0.00"));
+            Check("blur curve: difference grows strictly across 6, 12, 20, 35, 60", growing, trail);
+        }
+    }
+
     private static void BlurKeepsBorder()
     {
         using (var white = Solid(300, 200, Color.White))
@@ -457,6 +499,29 @@ internal static class LookTests
         SplashContent plain = SplashContent.Load(Temp("splash-empty"), "Devin", new Size(888, 500));
         Check("splash: defaults use app name and artwork size",
             plain.Title == "DEVIN" && plain.Logs[1] == "> custom artwork" && plain.Logs[2] == "> artwork 888 \u00D7 500" && plain.Logs[3] == "> opening Devin", plain.Logs[2]);
+    }
+
+    private static int RenderSplash(string folder, string app, string output)
+    {
+        string repo = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", ".."));
+        string web = Path.Combine(repo, "web");
+        Directory.CreateDirectory(Path.Combine(output, "assets"));
+        File.Copy(Path.Combine(web, "style.css"), Path.Combine(output, "style.css"), true);
+        File.Copy(Path.Combine(web, "animation.js"), Path.Combine(output, "animation.js"), true);
+        File.Copy(Path.Combine(web, "assets", "contours.js"), Path.Combine(output, "assets", "contours.js"), true);
+        string wallpaper = Path.Combine(folder, "wallpaper.jpg");
+        if (!File.Exists(wallpaper)) wallpaper = Path.Combine(web, "assets", "artwork.jpg");
+        string avatar = Path.Combine(folder, "avatar.jpg");
+        if (!File.Exists(avatar)) avatar = wallpaper;
+        File.Copy(wallpaper, Path.Combine(output, "assets", "artwork.jpg"), true);
+        File.Copy(avatar, Path.Combine(output, "assets", "avatar.jpg"), true);
+        Size size;
+        using (Bitmap decoded = ImageCodec.DecodeJpeg(ImageCodec.ReadBytes(wallpaper))) size = decoded.Size;
+        SplashContent content = SplashContent.Load(folder, app, size);
+        File.WriteAllBytes(Path.Combine(output, "index.html"),
+            SplashPage.RenderIndex(File.ReadAllBytes(Path.Combine(web, "index.html")), content, app));
+        Console.WriteLine("rendered " + folder + " -> " + output);
+        return 0;
     }
 
     private static int Sheets()

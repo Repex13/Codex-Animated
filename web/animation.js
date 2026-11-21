@@ -12,7 +12,10 @@
   const duration = 12000;
   const rate = root.dataset.rate === '2' ? 2 : 1;
   const motionPreference = window.matchMedia('(prefers-reduced-motion: reduce)');
-  const reduced = motionPreference.matches;
+  const stillParam = parseFloat(new URLSearchParams(location.search).get('still'));
+  const still = stillParam > 0 ? stillParam : 0;
+  if (still) root.dataset.still = '1';
+  const reduced = !still && motionPreference.matches;
   let completed = false;
   let frame = 0;
   let origin = 0;
@@ -24,6 +27,7 @@
     cancelAnimationFrame(frame);
     root.dataset.completed = 'true';
     window.chrome?.webview?.postMessage(status);
+    if (window.parent !== window) window.parent.postMessage({ splash: status }, location.origin);
   }
 
   $('.skip').addEventListener('click', () => finish('complete'));
@@ -34,7 +38,7 @@
     }
   });
   motionPreference.addEventListener('change', event => {
-    if (event.matches) finish('complete');
+    if (event.matches && !still) finish('complete');
   });
   if (reduced) {
     finish('complete');
@@ -43,6 +47,22 @@
 
   document.querySelectorAll('.boot-logs div').forEach(line => { if (!line.textContent.trim()) line.remove(); });
   if (!$('#subtitle').textContent.trim()) subtitle.style.display = 'none';
+  const nowShowing = $('.now-showing');
+  if (nowShowing && !nowShowing.textContent.trim()) nowShowing.textContent = nowShowing.dataset.fallback || '';
+  let lineColor = '#c8c0cd';
+  function prepareLineColor() {
+    const m = /^#([0-9a-f]{6})$/i.exec(getComputedStyle(root).getPropertyValue('--accent').trim());
+    if (!m) return;
+    const accent = [0, 2, 4].map(i => parseInt(m[1].substr(i, 2), 16)), base = [0xd6, 0xd0, 0xdc];
+    lineColor = `rgb(${base.map((b, i) => Math.round(b * .7 + accent[i] * .3)).join(',')})`;
+  }
+  function fitTitle() {
+    const title = $('.boot-title'), box = $('.identity');
+    title.style.fontSize = '';
+    const base = parseFloat(getComputedStyle(title).fontSize);
+    if (title.scrollWidth > box.clientWidth)
+      title.style.fontSize = `${Math.max(18, base * box.clientWidth / title.scrollWidth)}px`;
+  }
   const clamp = n => Math.max(0, Math.min(1, n));
   const smooth = n => { const t = clamp(n); return t*t*(3-2*t); };
   const particles = Array.from({length: reduced ? 0 : 14}, (_, i) => {
@@ -134,12 +154,13 @@
     const textBounds=[];
     for(const selector of ['.boot-title','.boot-caption']){
       const node=$(selector),r=rect(node),style=window.getComputedStyle(node);
+      const text=style.textTransform==='uppercase'?node.textContent.toUpperCase():node.textContent;
       if(node.textContent)textBounds.push(r);
       ink.font=`${style.fontWeight} ${parseFloat(style.fontSize)/scale}px ${style.fontFamily}`;
       ink.textAlign='center';ink.textBaseline='middle';ink.fillStyle=style.color;
-      ink.globalAlpha=selector==='.boot-caption'?.5:1;
+      ink.globalAlpha=1;
       ink.letterSpacing=`${(parseFloat(style.letterSpacing)||0)/scale}px`;
-      ink.fillText(node.textContent,r.x+r.w/2,r.y+r.h/2,r.w);
+      ink.fillText(text,r.x+r.w/2,r.y+r.h/2,r.w);
     }
     ink.globalAlpha=1;
     ink.globalCompositeOperation='source-atop';ink.globalAlpha=.24;ink.fillStyle='#9b9099';
@@ -180,7 +201,7 @@
     const stamp=p===1?1:p+drift*.00001;
     if(stamp===lastTrace)return;lastTrace=stamp;
     ctx.clearRect(0,0,1536,1024);
-    ctx.strokeStyle='#c8c0cd';ctx.lineWidth=1.25;ctx.lineCap='round';ctx.lineJoin='round';
+    ctx.strokeStyle=lineColor;ctx.lineWidth=1.25;ctx.lineCap='round';ctx.lineJoin='round';
     if(p===1){
       ctx.globalAlpha=1;paths.forEach(path=>ctx.stroke(path.full));
     }else{
@@ -238,11 +259,11 @@
     });
     $('.dashed').style.transformOrigin='200px 200px';$('.dashed').style.transform=`rotate(${reduced?0:s*16}deg)`;
     $('.boot-title').style.clipPath=`inset(0 ${(1-clamp((s-1.9)/.7))*100}% 0 0)`;
-    $('.boot-caption').style.opacity=String(smooth((s-2.5)/.35)*.5);
+    $('.boot-caption').style.opacity=String(smooth((s-2.5)/.35));
     $('.wave').style.transform=`scaleY(${reduced?1:.6+Math.sin(s*6)*.4})`;
     $('.boot-grid').style.opacity=String(smooth((s-.8)/.6)*(1-color));
     $('.boot-corners').style.opacity=String(smooth((s-.8)/.6)*(1-color));
-    $('.boot-logs').style.opacity=String((1-color)*.55);
+    $('.boot-logs').style.opacity=String(1-smooth((s-3.7)/.45));
     document.querySelectorAll('.boot-logs div').forEach((line,i)=>line.style.opacity=String(smooth((s-.15-i*.38)/.3)));
     const assembling=clamp((s-5.08)/2.02);
     if(s>=4.18&&s<7.43)trace(reduced?1:assembling,s-4.18,reduced?1:dissolve);
@@ -251,7 +272,7 @@
     canvas.dataset.dissolve=dissolve.toFixed(3);
     art.style.opacity=String(fragments.length ? color : smooth((s-4.18)/2.9));
     // The art stays registered to the contours until the color transition finishes.
-    art.style.transform=reduced?'none':`scale(${1+.012*smooth((s-7.42)/3.58)})`;
+    art.style.transform=reduced?'none':`scale(${1+.03*smooth((s-7.42)/3.58)})`;
     $('.shade').style.opacity=String(color);
     hud.style.opacity=String(smooth((s-7.24)/.45));
     $('.sync-fill').style.transform=`scaleX(${p})`;
@@ -290,6 +311,8 @@
       finish('assetError');
       return;
     }
+    prepareLineColor();
+    fitTitle();
     paths = preparePaths(window.traceWallpaper ? window.traceWallpaper(art) : window.CONTOUR_PATHS || []);
     fragments = prepareFragments(paths);
     // A flat custom image can have no outlines. Its color layer fades in on its own.
@@ -301,6 +324,10 @@
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     lastTrace = -1;
     lastUI = -Infinity;
+    if (still) {
+      render(Math.min(duration, still * 1000));
+      return;
+    }
     render(0);
     origin = performance.now();
     frame = requestAnimationFrame(tick);

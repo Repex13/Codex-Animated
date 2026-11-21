@@ -111,7 +111,7 @@ internal static class ArtworkLook
     private static double Sigma(int blur, int longSide)
     {
         double unit = Math.Max(0, Math.Min(100, blur)) / 100.0;
-        return 0.025 * unit * unit * longSide;
+        return 0.025 * Math.Pow(unit, 1.5) * longSide;
     }
 
     private static Bitmap Blur(Bitmap src, double sigma)
@@ -126,12 +126,23 @@ internal static class ArtworkLook
             int stride;
             Read(small, out data, out stride);
             var temp = new byte[data.Length];
-            foreach (int size in BoxSizes(sigma * scale, 3))
+            double working = sigma * scale;
+            if (working < 2.0)
             {
-                int radius = (size - 1) / 2;
-                if (radius < 1) continue;
-                BoxHorizontal(data, temp, sw, sh, stride, radius);
-                BoxVertical(temp, data, sw, sh, stride, radius);
+                // Box passes cannot approximate a Gaussian this narrow.
+                float[] kernel = GaussianKernel(working);
+                GaussHorizontal(data, temp, sw, sh, stride, kernel);
+                GaussVertical(temp, data, sw, sh, stride, kernel);
+            }
+            else
+            {
+                foreach (int size in BoxSizes(working, 3))
+                {
+                    int radius = (size - 1) / 2;
+                    if (radius < 1) continue;
+                    BoxHorizontal(data, temp, sw, sh, stride, radius);
+                    BoxVertical(temp, data, sw, sh, stride, radius);
+                }
             }
             Write(small, data, stride);
             if (scale >= 1.0) { Bitmap done = small; small = null; return done; }
@@ -152,6 +163,45 @@ internal static class ArtworkLook
         var sizes = new int[passes];
         for (int i = 0; i < passes; i++) sizes[i] = i < switchAt ? lower : upper;
         return sizes;
+    }
+
+    private static float[] GaussianKernel(double sigma)
+    {
+        int radius = (int)Math.Ceiling(3 * sigma);
+        var kernel = new float[2 * radius + 1];
+        double sum = 0;
+        for (int i = -radius; i <= radius; i++) sum += Math.Exp(-(i * i) / (2 * sigma * sigma));
+        for (int i = -radius; i <= radius; i++) kernel[i + radius] = (float)(Math.Exp(-(i * i) / (2 * sigma * sigma)) / sum);
+        return kernel;
+    }
+
+    private static void GaussHorizontal(byte[] src, byte[] dst, int w, int h, int stride, float[] kernel)
+    {
+        int r = kernel.Length / 2;
+        for (int y = 0; y < h; y++)
+        {
+            int row = y * stride;
+            for (int x = 0; x < w; x++)
+                for (int c = 0; c < 3; c++)
+                {
+                    float sum = 0;
+                    for (int k = -r; k <= r; k++) sum += kernel[k + r] * src[row + Math.Max(0, Math.Min(w - 1, x + k)) * 3 + c];
+                    dst[row + x * 3 + c] = (byte)Math.Min(255, (int)(sum + 0.5f));
+                }
+        }
+    }
+
+    private static void GaussVertical(byte[] src, byte[] dst, int w, int h, int stride, float[] kernel)
+    {
+        int r = kernel.Length / 2;
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++)
+                for (int c = 0; c < 3; c++)
+                {
+                    float sum = 0;
+                    for (int k = -r; k <= r; k++) sum += kernel[k + r] * src[Math.Max(0, Math.Min(h - 1, y + k)) * stride + x * 3 + c];
+                    dst[y * stride + x * 3 + c] = (byte)Math.Min(255, (int)(sum + 0.5f));
+                }
     }
 
     private static void BoxHorizontal(byte[] src, byte[] dst, int w, int h, int stride, int r)

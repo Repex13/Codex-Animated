@@ -38,26 +38,27 @@ internal static class Launcher
     private static extern bool SetProcessDpiAwarenessContext(IntPtr context);
 
     // none: open the app, then play the animation on top. --artwork: the wallpaper helper.
-    // --preview [folder]: play with the app's settings or a library theme, then exit.
+    // --preview [folder [hwnd]]: play with the app's settings or a library theme, then exit;
+    // with a window handle, centred on the monitor of that window.
     // --splash <hwnd>: play centred on the monitor of that window (started by the helper).
     internal static int Run(string[] args)
     {
         Environment.SetEnvironmentVariable("ELECTRON_RUN_AS_NODE", null);
         bool launch = args.Length == 0;
         bool artwork = args.Length == 1 && args[0] == "--artwork";
-        bool preview = (args.Length == 1 || args.Length == 2) && args[0] == "--preview";
+        bool preview = args.Length >= 1 && args.Length <= 3 && args[0] == "--preview";
         bool splash = args.Length == 2 && args[0] == "--splash";
         string folder = AppTarget.SettingsDirectory;
         IntPtr anchor = IntPtr.Zero;
-        if (preview && args.Length == 2)
+        if (preview && args.Length >= 2)
         {
             folder = args[1];
             if (!Directory.Exists(folder)) return 64;
         }
-        if (splash)
+        if (splash || (preview && args.Length == 3))
         {
             long handle;
-            if (!long.TryParse(args[1], NumberStyles.None, CultureInfo.InvariantCulture, out handle)) return 64;
+            if (!long.TryParse(args[args.Length - 1], NumberStyles.None, CultureInfo.InvariantCulture, out handle)) return 64;
             anchor = new IntPtr(handle);
         }
         if (!launch && !artwork && !preview && !splash) return 64;
@@ -229,7 +230,7 @@ internal sealed class Splash : Form
         Result = 4;
         Text = AppTarget.Product;
         AutoScaleMode = AutoScaleMode.None;
-        BackColor = Color.FromArgb(8, 20, 29);
+        BackColor = Color.FromArgb(8, 6, 13);
         FormBorderStyle = FormBorderStyle.None;
         StartPosition = FormStartPosition.Manual;
         ShowInTaskbar = false;
@@ -256,16 +257,6 @@ internal sealed class Splash : Form
     }
 
     protected override bool ShowWithoutActivation { get { return !activate; } }
-
-    protected override CreateParams CreateParams
-    {
-        get
-        {
-            CreateParams p = base.CreateParams;
-            p.ClassStyle |= 0x20000; // CS_DROPSHADOW
-            return p;
-        }
-    }
 
     protected override void OnHandleCreated(EventArgs args)
     {

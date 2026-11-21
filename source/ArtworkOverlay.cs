@@ -250,7 +250,7 @@ internal sealed class ArtworkOverlay : ApplicationContext
         string stamp = WallpaperStamp();
         bool rawChanged = stamp != wallpaperStamp;
         bool relook = rawChanged || !next.Look.SameRender(profile.Look);
-        Bitmap nextRaw = rawChanged ? settings.LoadBitmap() : null;
+        Bitmap nextRaw = rawChanged ? settings.LoadBitmapStrict() : null;
         Bitmap nextSource = null;
         if (relook)
         {
