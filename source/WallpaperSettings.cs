@@ -13,19 +13,135 @@ internal sealed class WallpaperSettings
     private readonly string bundledPath;
     private readonly string settingsDirectory;
     private readonly string customPath;
+    private readonly string opacityPath;
+    private readonly string stylePath;
+    private readonly string skipPath;
+    private readonly string avatarPath;
 
     internal WallpaperSettings() : this(
         LauncherTheme.DefaultWallpaperPath,
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Codex Animated")) { }
+        AppTarget.SettingsDirectory) { }
 
     internal WallpaperSettings(string bundledPath, string settingsDirectory)
     {
         this.bundledPath = bundledPath;
         this.settingsDirectory = settingsDirectory;
         customPath = Path.Combine(settingsDirectory, "wallpaper.jpg");
+        opacityPath = Path.Combine(settingsDirectory, "opacity.txt");
+        stylePath = Path.Combine(settingsDirectory, "style.txt");
+        skipPath = Path.Combine(settingsDirectory, "skip-when-open.flag");
+        avatarPath = Path.Combine(settingsDirectory, "avatar.jpg");
     }
 
     internal bool HasCustomWallpaper { get { return File.Exists(customPath); } }
+
+    // Artwork opacity 0..255; 38 is the shipped 15% default.
+    internal byte Opacity
+    {
+        get
+        {
+            try
+            {
+                byte value;
+                if (File.Exists(opacityPath) &&
+                    byte.TryParse(File.ReadAllText(opacityPath).Trim(), out value)) return value;
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+            return 38;
+        }
+    }
+
+    internal void SaveOpacity(byte alpha)
+    {
+        try
+        {
+            Directory.CreateDirectory(settingsDirectory);
+            File.WriteAllText(opacityPath, alpha.ToString());
+        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+    }
+
+    // "natural" shows the wallpaper as-is; "soften" blurs + darkens for text
+    // readability; "aura" maps it to a violet Nen-style duotone.
+    internal string Style
+    {
+        get
+        {
+            try
+            {
+                if (File.Exists(stylePath))
+                {
+                    string value = File.ReadAllText(stylePath).Trim();
+                    if (value == "soften" || value == "dim" || value == "aura") return value;
+                }
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+            return "natural";
+        }
+    }
+
+    internal void SaveStyle(string style)
+    {
+        try
+        {
+            Directory.CreateDirectory(settingsDirectory);
+            File.WriteAllText(stylePath, style);
+        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+    }
+
+    // The launcher checks this flag before playing the splash.
+    internal bool SkipWhenOpen
+    {
+        get { return File.Exists(skipPath); }
+        set
+        {
+            try
+            {
+                if (value)
+                {
+                    Directory.CreateDirectory(settingsDirectory);
+                    using (File.Create(skipPath)) { }
+                }
+                else File.Delete(skipPath);
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+    }
+
+    internal bool HasCustomAvatar { get { return File.Exists(avatarPath); } }
+
+    // The radar avatar in the splash; falls back to the wallpaper when unset.
+    internal byte[] LoadAvatarJpegOr(byte[] fallback)
+    {
+        if (HasCustomAvatar)
+        {
+            try
+            {
+                byte[] saved = ReadBytes(avatarPath);
+                using (DecodeJpeg(saved)) { }
+                return saved;
+            }
+            catch (InvalidDataException) { }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+        return fallback;
+    }
+
+    internal void ImportAvatar(string path) { SaveTo(avatarPath, DecodeToJpeg(path)); }
+
+    internal void ResetAvatar()
+    {
+        WithFileLock(delegate {
+            try { File.Delete(avatarPath); } catch (DirectoryNotFoundException) { }
+        });
+    }
 
     internal Bitmap LoadBitmap() { return LoadSelected(DecodeJpeg); }
 
@@ -55,9 +171,8 @@ internal sealed class WallpaperSettings
         return decode(ReadBytes(bundledPath));
     }
 
-    internal Bitmap Import(string path)
+    internal byte[] DecodeToJpeg(string path)
     {
-        byte[] jpeg;
         using (var input = new MemoryStream(ReadBytes(path), false))
         using (var normalized = Decode(input, false))
         using (var output = new MemoryStream())
@@ -66,10 +181,15 @@ internal sealed class WallpaperSettings
             options.Param[0] = new EncoderParameter(Encoder.Quality, 94L);
             var codec = Array.Find(ImageCodecInfo.GetImageEncoders(), c => c.FormatID == ImageFormat.Jpeg.Guid);
             normalized.Save(output, codec, options);
-            jpeg = output.ToArray();
+            return output.ToArray();
         }
+    }
+
+    internal Bitmap Import(string path)
+    {
+        byte[] jpeg = DecodeToJpeg(path);
         Bitmap next = DecodeJpeg(jpeg);
-        try { Save(jpeg); return next; }
+        try { SaveTo(customPath, jpeg); return next; }
         catch { next.Dispose(); throw; }
     }
 
@@ -87,10 +207,10 @@ internal sealed class WallpaperSettings
         catch { next.Dispose(); throw; }
     }
 
-    private void Save(byte[] jpeg)
+    private void SaveTo(string target, byte[] jpeg)
     {
         Directory.CreateDirectory(settingsDirectory);
-        string temporary = Path.Combine(settingsDirectory, "wallpaper-" + Guid.NewGuid().ToString("N") + ".tmp");
+        string temporary = target + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
         {
             using (var file = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
@@ -101,8 +221,8 @@ internal sealed class WallpaperSettings
             // Same-directory rename with replace works whether another launcher has
             // already saved a wallpaper or this is the first choice.
             WithFileLock(delegate {
-                if (!MoveFileEx(temporary, customPath, 0x1 | 0x8))
-                    throw new IOException("Windows could not save the selected wallpaper.", new Win32Exception());
+                if (!MoveFileEx(temporary, target, 0x1 | 0x8))
+                    throw new IOException("Windows could not save the selected image.", new Win32Exception());
             });
         }
         finally { File.Delete(temporary); }
@@ -110,7 +230,7 @@ internal sealed class WallpaperSettings
 
     private static void WithFileLock(Action operation)
     {
-        using (var mutex = new Mutex(false, @"Local\CodexAnimatedWallpaperSettings"))
+        using (var mutex = new Mutex(false, @"Local\" + AppTarget.HelperName + "WallpaperSettings"))
         {
             try
             {

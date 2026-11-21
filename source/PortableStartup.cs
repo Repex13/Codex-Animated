@@ -30,7 +30,7 @@ internal static class PortableStartup
             if (!(ex is IOException || ex is UnauthorizedAccessException || ex is Win32Exception ||
                 ex is System.Security.SecurityException)) throw;
             MessageBox.Show("Windows could not prepare the launcher files.\n\n" + ex.Message,
-                "Codex Animated", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                AppTarget.Product, MessageBoxButtons.OK, MessageBoxIcon.Error);
             return 1;
         }
         return RunLauncher(args);
@@ -53,8 +53,8 @@ internal static class PortableStartup
         var assembly = typeof(PortableStartup).Assembly;
         string build = assembly.ManifestModule.ModuleVersionId.ToString("N");
         string folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "Codex Animated", "Runtime", build);
-        using (var mutex = new Mutex(false, @"Local\CodexAnimated.Bundle." + build))
+            AppTarget.Product, "Runtime", build);
+        using (var mutex = new Mutex(false, @"Local\" + AppTarget.HelperName + ".Bundle." + build))
         {
             try
             {
