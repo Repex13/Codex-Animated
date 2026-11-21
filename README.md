@@ -64,6 +64,10 @@ The script uses the 64-bit .NET Framework C# compiler and the WebView2 SDK DLLs 
 
 Run `Uninstall.cmd`. It stops the helpers, removes their start-with-Windows entries, points shortcuts back to the native apps (or removes them), and deletes the install folder. Add `-RemoveData` to `Uninstall.ps1` to also delete your themes and settings. It asks before it changes anything, and `-WhatIf` shows what it would do without doing it.
 
+## What's next
+
+See [ROADMAP.md](ROADMAP.md) for the planned updates.
+
 ## Credits
 
 The portrait startup animation is adapted from panding999’s Codex Startup Animation. The Windows adaptation uses the sunset illustration supplied for this release and traces the selected wallpaper at startup. [Upstream animation at the source revision](https://github.com/panding999/codex-startup-animation/tree/c743c2b5eceaa7be9dc511d23a1a77f7c4ce6248)
