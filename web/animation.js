@@ -10,6 +10,7 @@
   const sweep = $('.light-sweep');
   const subtitle = $('.subtitle');
   const duration = 12000;
+  const rate = root.dataset.rate === '2' ? 2 : 1;
   const motionPreference = window.matchMedia('(prefers-reduced-motion: reduce)');
   const reduced = motionPreference.matches;
   let completed = false;
@@ -40,6 +41,8 @@
     return;
   }
 
+  document.querySelectorAll('.boot-logs div').forEach(line => { if (!line.textContent.trim()) line.remove(); });
+  if (!$('#subtitle').textContent.trim()) subtitle.style.display = 'none';
   const clamp = n => Math.max(0, Math.min(1, n));
   const smooth = n => { const t = clamp(n); return t*t*(3-2*t); };
   const particles = Array.from({length: reduced ? 0 : 14}, (_, i) => {
@@ -271,7 +274,7 @@
 
   function tick(now) {
     if (completed) return;
-    const elapsed = Math.min(duration, now - origin);
+    const elapsed = Math.min(duration, (now - origin) * rate);
     render(elapsed);
     if (elapsed >= duration) {
       finish('complete');

@@ -10,7 +10,7 @@
   <script src="animation.js" defer></script>
 </head>
 <body>
-  <main class="window" aria-label="{{APP}} startup animation">
+  <main class="window" aria-label="{{APP}} startup animation" data-rate="{{RATE}}" data-theme="{{THEME}}" style="--accent:{{ACCENT}}">
   <div class="scene" aria-hidden="true">
     <img class="artwork" src="assets/artwork.jpg" alt="" decoding="async" fetchpriority="high">
     <canvas class="line-art" width="1536" height="1024"></canvas>
@@ -26,7 +26,7 @@
         <div class="sync-track"><div class="sync-fill"></div></div>
         <span class="sync-phase">INITIALIZING</span>
       </div>
-      <div class="subtitle"><span id="subtitle">幽灵来到…你身边～</span></div>
+      <div class="subtitle"><span id="subtitle">{{SUBTITLE}}</span></div>
       <div class="coordinates"><span>RESONANCE / AEMEATH</span><span id="timecode">00:00:00</span></div>
     </div>
     <div class="boot-grid"></div>
@@ -40,11 +40,11 @@
           <i class="reticle tl"></i><i class="reticle tr"></i><i class="reticle bl"></i><i class="reticle br"></i>
         </div>
         <svg class="wave" viewBox="0 0 400 22"><path d="M0 11 Q15 5 30 11 T60 11 T90 11 T120 11 T150 11 T180 11 T210 11 T240 11 T270 11 T300 11 T330 11 T360 11 T400 11"/></svg>
-        <div class="boot-title">飞行雪绒</div>
-        <div class="boot-caption">{{APP}} INITIALIZE / TYPE-0</div>
+        <div class="boot-title">{{TITLE}}</div>
+        <div class="boot-caption">{{APP}} INITIALIZE</div>
       </div>
     </div>
-    <div class="boot-logs"><div>&gt; MAGI SYSTEM · CASPER / MELCHIOR / BALTHASAR</div><div>&gt; loading renderer surface ........ ok</div><div>&gt; entry plug depth 21.6 ........... ok</div><div>&gt; LCL pressure nominal</div></div>
+    <div class="boot-logs"><div>{{LOG1}}</div><div>{{LOG2}}</div><div>{{LOG3}}</div><div>{{LOG4}}</div></div>
     <div class="transition-flash" aria-hidden="true"></div>
   </div>
   <div class="shutter-line" aria-hidden="true"></div>

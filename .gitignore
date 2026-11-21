@@ -2,3 +2,5 @@
 /AntigravityAnimated.exe
 /CodexAnimated.exe
 /ThemeStudio.exe
+/tools/out/
+/themes/**/*.jpg

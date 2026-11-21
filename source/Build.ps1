@@ -11,7 +11,8 @@ try {
     }
     $sources = '.\source\PortableStartup.cs', '.\source\ArtworkUpgrade.cs', '.\source\Launcher.cs',
         '.\source\ArtworkOverlay.cs', '.\source\PreviewArtworkChild.cs', '.\source\WallpaperSettings.cs',
-        '.\source\AppTarget.cs'
+        '.\source\AppTarget.cs', '.\source\ThemeSettings.cs', '.\source\ArtworkLook.cs', '.\source\ImageCodec.cs',
+        '.\source\SplashPage.cs', '.\source\DarkMenu.cs'
     $manifestTemplate = Get-Content 'source\app.manifest' -Raw
     $targets = @(
         @{ Define = 'APP_DEVIN';       Out = 'DevinAnimated.exe';       Identity = 'DevinAnimated';       Icon = 'source\launcher.ico' },

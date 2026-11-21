@@ -57,8 +57,8 @@ internal static class AppTarget
         }
     }
 
-    // Opens the target application. The splash calls this after the animation;
-    // starting the app again lets it bring an existing session forward.
+    // Opens the target application. Starting it again lets it bring an existing
+    // session forward.
     internal static void Launch()
     {
 #if APP_CODEX
@@ -130,6 +130,22 @@ internal static class AppTarget
         finally { CloseHandle(process); }
     }
 
+    // When the process (by id) was created; false when it cannot be queried.
+    internal static bool TryGetStartTime(uint pid, out DateTime utc)
+    {
+        utc = DateTime.MinValue;
+        IntPtr process = OpenProcess(0x1000, false, pid); // QUERY_LIMITED_INFORMATION
+        if (process == IntPtr.Zero) return false;
+        try
+        {
+            long created, exited, kernel, user;
+            if (!GetProcessTimes(process, out created, out exited, out kernel, out user)) return false;
+            utc = DateTime.FromFileTimeUtc(created);
+            return true;
+        }
+        finally { CloseHandle(process); }
+    }
+
     // A visible top-level target window, or zero when the app is not running.
     // Used by the launcher to skip the splash when a session already exists.
     internal static IntPtr FindMainWindow()
@@ -187,6 +203,7 @@ internal static class AppTarget
     [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr window, out uint pid);
     [DllImport("kernel32.dll")] private static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);
     [DllImport("kernel32.dll")] private static extern bool CloseHandle(IntPtr handle);
+    [DllImport("kernel32.dll")] private static extern bool GetProcessTimes(IntPtr process, out long created, out long exited, out long kernel, out long user);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] private static extern bool QueryFullProcessImageName(IntPtr process, uint flags, StringBuilder path, ref uint size);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] private static extern int GetPackageFamilyName(IntPtr process, ref uint length, StringBuilder family);
 

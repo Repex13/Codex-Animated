@@ -6,7 +6,7 @@ using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
-// The controller verifies the official Devin install, process and top-level HWND before attaching.
+// The controller verifies the official app install, process and top-level HWND before attaching.
 internal sealed class PreviewArtworkChild : NativeWindow, IDisposable
 {
     private readonly IntPtr parent;
@@ -16,11 +16,14 @@ internal sealed class PreviewArtworkChild : NativeWindow, IDisposable
     private Bitmap image;
     private byte alpha;
     private Size presented;
+    private int focusX = 50, focusY = 50;
     private bool enabled = true, imageChanged;
 
-    internal PreviewArtworkChild(IntPtr parent, uint expectedPid, Bitmap image, byte alpha)
+    internal PreviewArtworkChild(IntPtr parent, uint expectedPid, Bitmap image, byte alpha, int focusX, int focusY)
     {
         this.parent = parent;
+        this.focusX = focusX;
+        this.focusY = focusY;
         this.image = image;
         this.alpha = alpha;
         uint actualPid;
@@ -52,6 +55,14 @@ internal sealed class PreviewArtworkChild : NativeWindow, IDisposable
     internal void SetImage(Bitmap replacement)
     {
         image = replacement;
+        imageChanged = true;
+    }
+
+    internal void SetFocus(int x, int y)
+    {
+        if (focusX == x && focusY == y) return;
+        focusX = x;
+        focusY = y;
         imageChanged = true;
     }
 
@@ -98,13 +109,12 @@ internal sealed class PreviewArtworkChild : NativeWindow, IDisposable
         {
             using (var frame = new Bitmap(size.Width, size.Height, PixelFormat.Format32bppRgb))
             {
-                var scale = Math.Max((float)size.Width / image.Width, (float)size.Height / image.Height);
-                float w = size.Width / scale, h = size.Height / scale;
+                RectangleF crop = ArtworkLook.CoverSource(image.Size, size, focusX, focusY);
                 using (var g = Graphics.FromImage(frame))
                 {
                     g.InterpolationMode = InterpolationMode.Bilinear;
                     g.DrawImage(image, new Rectangle(0, 0, size.Width, size.Height),
-                        new RectangleF((image.Width - w) / 2, (image.Height - h) / 2, w, h), GraphicsUnit.Pixel);
+                        crop, GraphicsUnit.Pixel);
                 }
                 IntPtr bitmap = frame.GetHbitmap(), dc = CreateCompatibleDC(IntPtr.Zero);
                 IntPtr old = IntPtr.Zero;
