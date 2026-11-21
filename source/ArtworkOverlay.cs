@@ -1,6 +1,8 @@
 using System;
 using System.Diagnostics;
 using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.Drawing.Imaging;
 using System.ComponentModel;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -9,13 +11,13 @@ using System.Windows.Forms;
 
 internal sealed class ArtworkOverlay : ApplicationContext
 {
-    private const string Family = "OpenAI.Codex_2p2nqsd0c76g0";
     private const uint ForegroundEvent = 3;
     private const uint MoveSizeStart = 0x000A, MoveSizeEnd = 0x000B;
     private const uint LocationEvent = 0x800B;
     private const int IdleInterval = 350, DragInterval = 16, WaitingInterval = 1500;
     private readonly WallpaperSettings settings;
-    private Bitmap source;
+    private Bitmap raw, source; // source aliases raw unless a style pass produced a copy.
+    private byte opacity;
     private PreviewArtworkChild child;
     private ArtworkWindow artwork;
     private bool childUnavailable, refreshing;
@@ -24,6 +26,7 @@ internal sealed class ArtworkOverlay : ApplicationContext
     private readonly ContextMenuStrip menu = new ContextMenuStrip();
     private readonly ToolStripMenuItem toggle = new ToolStripMenuItem("Hide artwork");
     private readonly ToolStripMenuItem restore = new ToolStripMenuItem("Restore default wallpaper");
+    private readonly ToolStripMenuItem restoreAvatar = new ToolStripMenuItem("Restore default avatar");
     private readonly Native.EventCallback onEvent;
     private IntPtr foregroundHook, locationHook, moveSizeHook, target;
     private uint targetPid, targetThread;
@@ -40,22 +43,60 @@ internal sealed class ArtworkOverlay : ApplicationContext
     private ArtworkOverlay(WallpaperSettings settings)
     {
         this.settings = settings;
-        source = settings.LoadBitmap();
+        raw = settings.LoadBitmap();
+        source = ApplyStyle(raw);
+        opacity = settings.Opacity;
         toggle.Click += delegate {
             enabled = !enabled;
             toggle.Text = enabled ? "Hide artwork" : "Show artwork";
-            SetCodexTransitions(enabled);
+            SetDevinTransitions(enabled);
             RefreshArtwork();
         };
         menu.Items.Add("Choose wallpaper\u2026", null, delegate { ChooseWallpaper(); });
         restore.Enabled = settings.HasCustomWallpaper;
         restore.Click += delegate { TryChangeWallpaper(null); };
         menu.Items.Add(restore);
+        menu.Items.Add("Choose avatar\u2026", null, delegate { ChooseAvatar(); });
+        restoreAvatar.Enabled = settings.HasCustomAvatar;
+        restoreAvatar.Click += delegate { TryResetAvatar(); };
+        menu.Items.Add(restoreAvatar);
+        menu.Items.Add(new ToolStripSeparator());
+        var styleMenu = new ToolStripMenuItem("Artwork style");
+        AddStyleItem(styleMenu, "Natural", "natural");
+        AddStyleItem(styleMenu, "Soften for readability", "soften");
+        AddStyleItem(styleMenu, "Dim for readability", "dim");
+        AddStyleItem(styleMenu, "Nen aura tint", "aura");
+        menu.Items.Add(styleMenu);
+        var opacityMenu = new ToolStripMenuItem("Artwork opacity");
+        foreach (int percent in new[] { 10, 15, 20, 25 })
+        {
+            byte alpha = (byte)Math.Round(255 * percent / 100.0);
+            var item = new ToolStripMenuItem(percent + "%") { Checked = opacity == alpha };
+            item.Click += delegate {
+                opacity = alpha;
+                settings.SaveOpacity(alpha);
+                foreach (ToolStripItem sibling in opacityMenu.DropDownItems)
+                    ((ToolStripMenuItem)sibling).Checked = sibling == item;
+                if (child != null) child.SetAlpha(alpha);
+                if (artwork != null) artwork.SetAlpha(alpha);
+                RefreshArtwork();
+            };
+            opacityMenu.DropDownItems.Add(item);
+        }
+        menu.Items.Add(opacityMenu);
+        var skip = new ToolStripMenuItem("Skip splash when " + AppTarget.Name + " is open")
+        {
+            Checked = settings.SkipWhenOpen,
+            CheckOnClick = true
+        };
+        skip.CheckedChanged += delegate { settings.SkipWhenOpen = skip.Checked; };
+        menu.Items.Add(skip);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(toggle);
         menu.Items.Add("Exit artwork", null, delegate { EndSession(); });
-        tray.Text = "Codex Animated artwork";
-        tray.Icon = SystemIcons.Application;
+        tray.Text = AppTarget.Product + " artwork";
+        try { tray.Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); }
+        catch (ArgumentException) { tray.Icon = SystemIcons.Application; }
         tray.ContextMenuStrip = menu;
         tray.Visible = true;
 
@@ -72,13 +113,194 @@ internal sealed class ArtworkOverlay : ApplicationContext
     private void ChooseWallpaper()
     {
         using (var dialog = new OpenFileDialog {
-            Title = "Choose a Codex wallpaper",
+            Title = "Choose a " + AppTarget.Name + " wallpaper",
             Filter = "Wallpaper images (*.jpg, *.jpeg, *.png, *.bmp)|*.jpg;*.jpeg;*.png;*.bmp",
             RestoreDirectory = true
         })
         {
             if (dialog.ShowDialog() == DialogResult.OK && !shuttingDown)
                 TryChangeWallpaper(dialog.FileName);
+        }
+    }
+
+    private void ChooseAvatar()
+    {
+        using (var dialog = new OpenFileDialog {
+            Title = "Choose a splash avatar",
+            Filter = "Avatar images (*.jpg, *.jpeg, *.png, *.bmp)|*.jpg;*.jpeg;*.png;*.bmp",
+            RestoreDirectory = true
+        })
+        {
+            if (dialog.ShowDialog() != DialogResult.OK || shuttingDown) return;
+            try
+            {
+                settings.ImportAvatar(dialog.FileName);
+                restoreAvatar.Enabled = true;
+                MessageBox.Show("The avatar will appear in the radar on the next animated start.",
+                    AppTarget.Product, MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (Exception error)
+            {
+                if (!(error is IOException || error is InvalidDataException || error is UnauthorizedAccessException || error is ArgumentException ||
+                    error is ExternalException || error is NotSupportedException ||
+                    error is System.Security.SecurityException)) throw;
+                MessageBox.Show("Could not change the avatar.\n\n" + error.Message,
+                    AppTarget.Product, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+        }
+    }
+
+    private void TryResetAvatar()
+    {
+        try
+        {
+            settings.ResetAvatar();
+            restoreAvatar.Enabled = false;
+        }
+        catch (Exception error)
+        {
+            if (!(error is IOException || error is UnauthorizedAccessException)) throw;
+            MessageBox.Show("Could not restore the default avatar.\n\n" + error.Message,
+                AppTarget.Product, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+    }
+
+    private void AddStyleItem(ToolStripMenuItem menu, string label, string value)
+    {
+        var item = new ToolStripMenuItem(label) { Checked = settings.Style == value };
+        item.Click += delegate {
+            settings.SaveStyle(value);
+            foreach (ToolStripItem sibling in menu.DropDownItems)
+                ((ToolStripMenuItem)sibling).Checked = sibling == item;
+            Restyle();
+        };
+        menu.DropDownItems.Add(item);
+    }
+
+    private void Restyle()
+    {
+        Bitmap old = source;
+        source = ApplyStyle(raw);
+        if (child != null) child.SetImage(source);
+        if (artwork != null) artwork.SetImage(source);
+        if (old != null && old != raw) old.Dispose();
+        RefreshArtwork();
+    }
+
+    // A styled copy of the wallpaper, or the same bitmap when style is natural.
+    private Bitmap ApplyStyle(Bitmap src)
+    {
+        var bounds = new Rectangle(0, 0, src.Width, src.Height);
+        if (settings.Style == "aura")
+        {
+            using (var gray = new Bitmap(src.Width, src.Height, PixelFormat.Format24bppRgb))
+            {
+                // Light blur under the tint so dense linework sits back.
+                using (var g = Graphics.FromImage(gray))
+                using (var attrs = new ImageAttributes())
+                {
+                    attrs.SetColorMatrix(new ColorMatrix(new float[][] {
+                        new float[] {0.299f, 0.299f, 0.299f, 0, 0},
+                        new float[] {0.587f, 0.587f, 0.587f, 0, 0},
+                        new float[] {0.114f, 0.114f, 0.114f, 0, 0},
+                        new float[] {0, 0, 0, 1, 0},
+                        new float[] {0, 0, 0, 0, 1}}));
+                    g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                    using (var soft = BlurBitmap(src, 5))
+                        g.DrawImage(soft, bounds, 0, 0, src.Width, src.Height, GraphicsUnit.Pixel, attrs);
+                }
+                var styled = new Bitmap(src.Width, src.Height, PixelFormat.Format24bppRgb);
+                using (var g = Graphics.FromImage(styled))
+                using (var attrs = new ImageAttributes())
+                {
+                    // Nen aura: grayscale luminance mapped onto a violet ramp.
+                    attrs.SetColorMatrix(new ColorMatrix(new float[][] {
+                        new float[] {0.55f, 0, 0, 0, 0},
+                        new float[] {0, 0.40f, 0, 0, 0},
+                        new float[] {0, 0, 0.82f, 0, 0},
+                        new float[] {0, 0, 0, 1, 0},
+                        new float[] {0, 0, 0, 0, 1}}));
+                    g.DrawImage(gray, bounds, 0, 0, src.Width, src.Height, GraphicsUnit.Pixel, attrs);
+                }
+                // Original colors dominant; the duotone lands as a violet wash.
+                var composite = new Bitmap(src.Width, src.Height, PixelFormat.Format24bppRgb);
+                try
+                {
+                    using (var g = Graphics.FromImage(composite))
+                    {
+                        g.DrawImage(src, bounds, 0, 0, src.Width, src.Height, GraphicsUnit.Pixel);
+                        using (var attrs = new ImageAttributes())
+                        {
+                            var wash = new ColorMatrix();
+                            wash.Matrix33 = 0.35f;
+                            attrs.SetColorMatrix(wash);
+                            g.DrawImage(styled, bounds, 0, 0, src.Width, src.Height, GraphicsUnit.Pixel, attrs);
+                        }
+                    }
+                    styled.Dispose();
+                    return composite;
+                }
+                catch { composite.Dispose(); throw; }
+            }
+        }
+        if (settings.Style == "dim") return BlurShade(src, 14, 132);
+        if (settings.Style == "soften")
+        {
+            int tinyW = Math.Max(1, src.Width / 10), tinyH = Math.Max(1, src.Height / 10);
+            using (var tiny = new Bitmap(tinyW, tinyH, PixelFormat.Format24bppRgb))
+            {
+                using (var tg = Graphics.FromImage(tiny))
+                {
+                    tg.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                    tg.DrawImage(src, 0, 0, tinyW, tinyH);
+                }
+                var styled = new Bitmap(src.Width, src.Height, PixelFormat.Format24bppRgb);
+                using (var g = Graphics.FromImage(styled))
+                {
+                    g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                    g.DrawImage(tiny, bounds);
+                    using (var shade = new SolidBrush(Color.FromArgb(78, 8, 20, 29)))
+                        g.FillRectangle(shade, bounds);
+                }
+                return styled;
+            }
+        }
+        return src;
+    }
+
+    // Heavy blur + shade used by the dim style: artwork becomes a soft dark
+    // texture so UI text stays readable over it.
+    private static Bitmap BlurShade(Bitmap src, int downscale, int shadeAlpha)
+    {
+        var styled = BlurBitmap(src, downscale);
+        try
+        {
+            using (var g = Graphics.FromImage(styled))
+            using (var shade = new SolidBrush(Color.FromArgb(shadeAlpha, 8, 20, 29)))
+                g.FillRectangle(shade, new Rectangle(0, 0, src.Width, src.Height));
+            return styled;
+        }
+        catch { styled.Dispose(); throw; }
+    }
+
+    // Downscale-then-upscale bicubic blur at the original size.
+    private static Bitmap BlurBitmap(Bitmap src, int downscale)
+    {
+        int tinyW = Math.Max(1, src.Width / downscale), tinyH = Math.Max(1, src.Height / downscale);
+        using (var tiny = new Bitmap(tinyW, tinyH, PixelFormat.Format24bppRgb))
+        {
+            using (var tg = Graphics.FromImage(tiny))
+            {
+                tg.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                tg.DrawImage(src, 0, 0, tinyW, tinyH);
+            }
+            var blurred = new Bitmap(src.Width, src.Height, PixelFormat.Format24bppRgb);
+            using (var g = Graphics.FromImage(blurred))
+            {
+                g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                g.DrawImage(tiny, new Rectangle(0, 0, src.Width, src.Height));
+            }
+            return blurred;
         }
     }
 
@@ -91,19 +313,21 @@ internal sealed class ArtworkOverlay : ApplicationContext
                 error is ExternalException || error is NotSupportedException ||
                 error is System.Security.SecurityException)) throw;
             MessageBox.Show("Could not change the wallpaper.\n\n" + error.Message,
-                "Codex Animated", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                AppTarget.Product, MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
     }
 
     private void ChangeWallpaper(string fileName)
     {
         // The store returns an unlocked image only after it has saved the choice.
-        Bitmap next = fileName == null ? settings.Reset() : settings.Import(fileName);
-        Bitmap old = source;
-        source = next;
-        if (child != null) child.SetImage(next);
-        if (artwork != null) artwork.SetImage(next);
-        old.Dispose();
+        Bitmap nextRaw = fileName == null ? settings.Reset() : settings.Import(fileName);
+        Bitmap oldRaw = raw, oldStyled = source;
+        raw = nextRaw;
+        source = ApplyStyle(nextRaw);
+        if (child != null) child.SetImage(source);
+        if (artwork != null) artwork.SetImage(source);
+        if (oldStyled != null && oldStyled != oldRaw) oldStyled.Dispose();
+        oldRaw.Dispose();
         restore.Enabled = settings.HasCustomWallpaper;
         RefreshArtwork();
     }
@@ -148,13 +372,13 @@ internal sealed class ArtworkOverlay : ApplicationContext
         targetPid = pid;
         targetThread = thread;
         timer.Interval = IdleInterval;
-        SetCodexTransitions(enabled);
+        SetDevinTransitions(enabled);
         locationHook = Native.SetWinEventHook(LocationEvent, LocationEvent, IntPtr.Zero, onEvent, pid, thread, 0);
         moveSizeHook = Native.SetWinEventHook(MoveSizeStart, MoveSizeEnd, IntPtr.Zero, onEvent, pid, thread, 0);
         return true;
     }
 
-    private void SetCodexTransitions(bool disable)
+    private void SetDevinTransitions(bool disable)
     {
         if (target == IntPtr.Zero || disable == changedTransitions) return;
         uint pid;
@@ -176,22 +400,7 @@ internal sealed class ArtworkOverlay : ApplicationContext
 
     private static bool OfficialProcess(uint pid)
     {
-        IntPtr process = Native.OpenProcess(0x1000, false, pid); // QUERY_LIMITED_INFORMATION
-        if (process == IntPtr.Zero) return false;
-        try
-        {
-            uint length = 256;
-            var family = new StringBuilder((int)length);
-            if (Native.GetPackageFamilyName(process, ref length, family) != 0 ||
-                !Family.Equals(family.ToString(), StringComparison.OrdinalIgnoreCase)) return false;
-            length = 32768;
-            var image = new StringBuilder((int)length);
-            if (!Native.QueryFullProcessImageName(process, 0, image, ref length)) return false;
-            string name = Path.GetFileName(image.ToString());
-            return string.Equals(name, "ChatGPT.exe", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(name, "Codex.exe", StringComparison.OrdinalIgnoreCase);
-        }
-        finally { Native.CloseHandle(process); }
+        return AppTarget.OwnsProcess(pid);
     }
 
     private void RefreshArtwork()
@@ -234,6 +443,7 @@ internal sealed class ArtworkOverlay : ApplicationContext
         if (artwork == null)
         {
             artwork = new ArtworkWindow(source);
+            artwork.SetAlpha(opacity);
             artwork.AttachTo(target);
         }
         if (!Native.IsWindowVisible(target) || Native.IsIconic(target))
@@ -272,7 +482,7 @@ internal sealed class ArtworkOverlay : ApplicationContext
         {
             if (child == null)
             {
-                child = new PreviewArtworkChild(target, targetPid, source);
+                child = new PreviewArtworkChild(target, targetPid, source, opacity);
                 return true;
             }
             child.SetEnabled(enabled);
@@ -298,7 +508,7 @@ internal sealed class ArtworkOverlay : ApplicationContext
 
     private void ReleaseTarget()
     {
-        SetCodexTransitions(false);
+        SetDevinTransitions(false);
         if (moveSizeHook != IntPtr.Zero) Native.UnhookWinEvent(moveSizeHook);
         if (locationHook != IntPtr.Zero) Native.UnhookWinEvent(locationHook);
         moveSizeHook = locationHook = IntPtr.Zero;
@@ -331,7 +541,8 @@ internal sealed class ArtworkOverlay : ApplicationContext
             tray.Visible = false;
             tray.Dispose();
             menu.Dispose();
-            source.Dispose();
+            if (source != raw) source.Dispose();
+            raw.Dispose();
         }
         base.Dispose(disposing);
     }
@@ -341,8 +552,9 @@ internal sealed class ArtworkOverlay : ApplicationContext
         private Bitmap image;
         private Surface source, current, previousSize;
         private Rectangle placed;
-        private bool shown;
-        private IntPtr codexOwner;
+        private bool shown, forceComposite;
+        private byte alpha = 38;
+        private IntPtr devinOwner;
 
         internal ArtworkWindow(Bitmap source)
         {
@@ -361,11 +573,18 @@ internal sealed class ArtworkOverlay : ApplicationContext
             ReleaseSurfaces();
         }
 
+        // Re-composites the same pixels with a new global opacity on the next Place.
+        internal void SetAlpha(byte value)
+        {
+            alpha = value;
+            forceComposite = true;
+        }
+
         internal void AttachTo(IntPtr window)
         {
             // Let Windows raise the pair together, before it presents the first frame
-            // of the reactivated window. Clicks and keyboard focus still go to Codex.
-            codexOwner = window;
+            // of the reactivated window. Clicks and keyboard focus still go to Devin.
+            devinOwner = window;
             if (IsHandleCreated && Native.GetWindow(Handle, Native.Owner) != window)
                 Native.SetOwner(Handle, -8, window); // GWLP_HWNDPARENT on our own top-level window.
         }
@@ -378,7 +597,7 @@ internal sealed class ArtworkOverlay : ApplicationContext
                 // NOACTIVATE, TRANSPARENT, LAYERED, TOOLWINDOW.
                 p.ExStyle |= 0x08000000 | 0x20 | 0x80000 | Native.ToolWindow;
                 p.ExStyle &= ~0x40000; // APPWINDOW
-                if (codexOwner != IntPtr.Zero) p.Parent = codexOwner;
+                if (devinOwner != IntPtr.Zero) p.Parent = devinOwner;
                 return p;
             }
         }
@@ -400,18 +619,19 @@ internal sealed class ArtworkOverlay : ApplicationContext
             if (IsDisposed) return;
             IntPtr handle = Handle;
             // Framework handle creation can assign a hidden taskbar owner of its own.
-            if (codexOwner == targetWindow && Native.GetWindow(handle, Native.Owner) != targetWindow)
+            if (devinOwner == targetWindow && Native.GetWindow(handle, Native.Owner) != targetWindow)
                 Native.SetOwner(handle, -8, targetWindow);
             bool topmost = Native.IsTopmost(targetWindow);
             const uint keepBounds = Native.NoActivate | Native.NoOwnerZOrder | Native.NoMove | Native.NoSize;
             if (!topmost && Native.IsTopmost(handle))
                 Native.SetWindowPos(handle, Native.NotTopmost, 0, 0, 0, 0, keepBounds);
 
-            if (current == null || rect.Size != placed.Size)
+            if (forceComposite || current == null || rect.Size != placed.Size)
             {
                 // Keep the previous image on screen while preparing the new crop.
                 // Commit both the pixels and the bounds without an intervening WM_PAINT.
-                Surface next = previousSize;
+                Surface next = (forceComposite && current != null && current.Size == rect.Size)
+                    ? current : previousSize;
                 if (next == null || next.Size != rect.Size)
                 {
                     try
@@ -424,17 +644,18 @@ internal sealed class ArtworkOverlay : ApplicationContext
                 var destination = new Native.Point { X = rect.X, Y = rect.Y };
                 var size = new Native.Size { Width = rect.Width, Height = rect.Height };
                 var from = new Native.Point();
-                var blend = new Native.Blend { ConstantAlpha = 38 };
+                var blend = new Native.Blend { ConstantAlpha = alpha };
                 if (!Native.UpdateLayeredWindow(handle, IntPtr.Zero, ref destination, ref size,
                     next.DC, ref from, 0, ref blend, 2))
                 {
-                    if (next != previousSize) next.Dispose();
+                    if (next != previousSize && next != current) next.Dispose();
                     return;
                 }
                 if (previousSize != null && previousSize != next) previousSize.Dispose();
                 previousSize = current;
                 current = next;
                 placed = rect;
+                forceComposite = false;
             }
             IntPtr previous = Native.GetWindow(targetWindow, Native.Previous);
             bool inPlace = previous == handle && Native.IsTopmost(handle) == topmost;
@@ -447,7 +668,7 @@ internal sealed class ArtworkOverlay : ApplicationContext
             if (inPlace) flags |= Native.NoZOrder;
             else if (topmost)
             {
-                // Use the preceding topmost window as the anchor if another app covers Codex.
+                // Use the preceding topmost window as the anchor if another app covers Devin.
                 if (previous == IntPtr.Zero || previous == handle || !Native.IsTopmost(previous))
                     previous = Native.TopmostPosition;
             }
@@ -463,7 +684,7 @@ internal sealed class ArtworkOverlay : ApplicationContext
             if (IsHandleCreated && Native.IsWindowVisible(Handle))
             {
                 Native.ShowWindow(Handle, 0);
-                if (Native.IsTopmost(Handle) && Native.GetWindow(Handle, Native.Owner) != codexOwner)
+                if (Native.IsTopmost(Handle) && Native.GetWindow(Handle, Native.Owner) != devinOwner)
                     Native.SetWindowPos(Handle, Native.NotTopmost, 0, 0, 0, 0,
                         Native.NoMove | Native.NoSize | Native.NoActivate | Native.NoOwnerZOrder);
             }
@@ -585,7 +806,6 @@ internal sealed class ArtworkOverlay : ApplicationContext
         [DllImport("gdi32.dll")] internal static extern bool DeleteDC(IntPtr dc);
         [DllImport("kernel32.dll")] internal static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);
         [DllImport("kernel32.dll")] internal static extern bool CloseHandle(IntPtr handle);
-        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, ExactSpelling = true)] internal static extern int GetPackageFamilyName(IntPtr process, ref uint length, StringBuilder family);
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] internal static extern bool QueryFullProcessImageName(IntPtr process, uint flags, StringBuilder path, ref uint size);
     }
 }

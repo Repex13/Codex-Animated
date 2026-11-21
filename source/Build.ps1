@@ -9,8 +9,27 @@ try {
     $resources = foreach ($asset in $assets) {
         '/resource:{0},bundle/{0}' -f $asset
     }
-    & $compiler /nologo /target:winexe /optimize+ /platform:x64 /out:CodexAnimated.exe /win32icon:source\launcher.ico /win32manifest:source\app.manifest /r:System.Management.dll /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:Microsoft.Web.WebView2.Core.dll /r:Microsoft.Web.WebView2.WinForms.dll @resources .\source\PortableStartup.cs .\source\ArtworkUpgrade.cs .\source\Launcher.cs .\source\ArtworkOverlay.cs .\source\PreviewArtworkChild.cs .\source\WallpaperSettings.cs
-    if ($LASTEXITCODE -ne 0) { throw "The C# build failed with exit code $LASTEXITCODE." }
+    $sources = '.\source\PortableStartup.cs', '.\source\ArtworkUpgrade.cs', '.\source\Launcher.cs',
+        '.\source\ArtworkOverlay.cs', '.\source\PreviewArtworkChild.cs', '.\source\WallpaperSettings.cs',
+        '.\source\AppTarget.cs'
+    $manifestTemplate = Get-Content 'source\app.manifest' -Raw
+    $targets = @(
+        @{ Define = 'APP_DEVIN';       Out = 'DevinAnimated.exe';       Identity = 'DevinAnimated';       Icon = 'source\launcher.ico' },
+        @{ Define = 'APP_ANTIGRAVITY'; Out = 'AntigravityAnimated.exe'; Identity = 'AntigravityAnimated'; Icon = 'source\launcher.ico' },
+        @{ Define = 'APP_CODEX';       Out = 'CodexAnimated.exe';       Identity = 'CodexAnimated';       Icon = 'source\codex.ico' }
+    )
+    foreach ($target in $targets) {
+        $manifest = Join-Path $env:TEMP ($target.Identity + '.manifest')
+        Set-Content -LiteralPath $manifest -Value ($manifestTemplate -replace 'name="DevinAnimated"', ('name="' + $target.Identity + '"'))
+        & $compiler /nologo /target:winexe /optimize+ /platform:x64 /out:$($target.Out) /define:$($target.Define) /win32icon:$($target.Icon) /win32manifest:$manifest /r:System.Management.dll /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:Microsoft.Web.WebView2.Core.dll /r:Microsoft.Web.WebView2.WinForms.dll @resources $sources
+        if ($LASTEXITCODE -ne 0) { throw "The $($target.Out) build failed with exit code $LASTEXITCODE." }
+        Remove-Item -LiteralPath $manifest -ErrorAction SilentlyContinue
+    }
+    $studioManifest = Join-Path $env:TEMP 'ThemeStudio.manifest'
+    Set-Content -LiteralPath $studioManifest -Value ($manifestTemplate -replace 'name="DevinAnimated"', 'name="ThemeStudio"')
+    & $compiler /nologo /target:winexe /optimize+ /platform:x64 /out:ThemeStudio.exe /win32icon:source\launcher.ico /win32manifest:$studioManifest /r:System.Windows.Forms.dll /r:System.Drawing.dll .\source\ThemeStudio.cs
+    if ($LASTEXITCODE -ne 0) { throw "The ThemeStudio.exe build failed with exit code $LASTEXITCODE." }
+    Remove-Item -LiteralPath $studioManifest -ErrorAction SilentlyContinue
 } finally {
     Pop-Location
 }

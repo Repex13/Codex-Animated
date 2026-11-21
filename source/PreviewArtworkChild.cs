@@ -6,7 +6,7 @@ using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
-// The controller verifies the official Codex package, process and top-level HWND before attaching.
+// The controller verifies the official Devin install, process and top-level HWND before attaching.
 internal sealed class PreviewArtworkChild : NativeWindow, IDisposable
 {
     private readonly IntPtr parent;
@@ -14,13 +14,15 @@ internal sealed class PreviewArtworkChild : NativeWindow, IDisposable
     private readonly uint parentThread;
     private readonly IntPtr dpiContext;
     private Bitmap image;
+    private byte alpha;
     private Size presented;
     private bool enabled = true, imageChanged;
 
-    internal PreviewArtworkChild(IntPtr parent, uint expectedPid, Bitmap image)
+    internal PreviewArtworkChild(IntPtr parent, uint expectedPid, Bitmap image, byte alpha)
     {
         this.parent = parent;
         this.image = image;
+        this.alpha = alpha;
         uint actualPid;
         parentThread = GetWindowThreadProcessId(parent, out actualPid);
         if (parentThread == 0 || actualPid != expectedPid || GetAncestor(parent, 2) != parent)
@@ -33,7 +35,7 @@ internal sealed class PreviewArtworkChild : NativeWindow, IDisposable
         {
             // Create as a child from the outset. No SetParent call or changes to the host.
             CreateHandle(new CreateParams {
-                Parent = parent, Caption = "Codex Animated artwork preview", Style = 0x40000000,
+                Parent = parent, Caption = AppTarget.Product + " artwork preview", Style = 0x40000000,
                 ExStyle = 0x80000 | 0x20 | 0x08000000 | 0x4, // LAYERED, TRANSPARENT, NOACTIVATE, NOPARENTNOTIFY
                 X = 0, Y = 0, Width = 1, Height = 1
             });
@@ -59,6 +61,13 @@ internal sealed class PreviewArtworkChild : NativeWindow, IDisposable
         enabled = value;
         if (Handle == IntPtr.Zero) return;
         if (!value) ShowWindow(Handle, 0);
+    }
+
+    internal void SetAlpha(byte value)
+    {
+        if (alpha == value) return;
+        alpha = value;
+        imageChanged = true;
     }
 
     internal bool RefreshSurface()
@@ -106,7 +115,7 @@ internal sealed class PreviewArtworkChild : NativeWindow, IDisposable
                     if (old == IntPtr.Zero || old == new IntPtr(-1)) throw new Win32Exception();
                     var from = new NativePoint();
                     var nativeSize = new NativeSize { W = size.Width, H = size.Height };
-                    var blend = new Blend { Alpha = 38 };
+                    var blend = new Blend { Alpha = alpha };
                     // Null destination preserves the original child-relative (0,0) across parent moves.
                     if (!UpdateLayeredWindow(Handle, IntPtr.Zero, IntPtr.Zero, ref nativeSize, dc,
                         ref from, 0, ref blend, 2)) throw new Win32Exception();

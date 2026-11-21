@@ -4,40 +4,24 @@ using System.Diagnostics;
 using System.IO;
 using System.Management;
 using System.Runtime.InteropServices;
-using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 
 internal static class ArtworkUpgrade
 {
-    // SHA-256 of previously shipped launchers and the previous local picker build.
-    private static bool PreviousBuild(string path)
-    {
-        using (var file = File.OpenRead(path))
-        using (var sha = SHA256.Create())
-        {
-            string hash = BitConverter.ToString(sha.ComputeHash(file)).Replace("-", "");
-            return hash == "4B65AFB848880C7E79E99497D0925096AB3D58EECE575019BB2986DDC4969983" ||
-                hash == "78CC9FB2C66E5BC07CF5FF19FEA1EC5A246D654A8AAE8B076E9CA72FFD1409F1" ||
-                hash == "C9E8E7BBE9AAC7B7A04402A898966E2402133EBD1019B35478187E31E9E59AC9" ||
-                hash == "727B588143FF147834ADB78392B24B4918FE4FC40C556853666D73D695B8133A";
-        }
-    }
-
     internal static bool TakeOverPreviousHelper(Mutex artworkMutex)
     {
         if (Acquire(artworkMutex, 0)) return true;
         bool requested = false;
         using (var current = Process.GetCurrentProcess())
         {
-            foreach (var process in Process.GetProcessesByName("CodexAnimated"))
+            foreach (var process in Process.GetProcessesByName(AppTarget.HelperName))
             using (process)
             {
                 try
                 {
                     if (requested || process.Id == current.Id || process.SessionId != current.SessionId) continue;
-                    if (process.HasExited || !PreviousBuild(process.MainModule.FileName) ||
-                        !HasArtworkArgument(process.Id)) continue;
+                    if (process.HasExited || !HasArtworkArgument(process.Id)) continue;
                     uint thread = FormsThread(process);
                     if (thread != 0 && !process.HasExited)
                         requested = PostThreadMessageW(thread, 0x0012, UIntPtr.Zero, IntPtr.Zero); // WM_QUIT

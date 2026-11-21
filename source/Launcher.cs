@@ -6,39 +6,35 @@ using System.IO;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading;
 using System.Windows.Forms;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 
+#if APP_DEVIN
+[assembly: AssemblyTitle("Devin Animated")]
+[assembly: AssemblyProduct("Devin Animated")]
+[assembly: AssemblyDescription("Windows launcher with the startup animation and wallpaper for Devin")]
+#elif APP_ANTIGRAVITY
+[assembly: AssemblyTitle("Antigravity Animated")]
+[assembly: AssemblyProduct("Antigravity Animated")]
+[assembly: AssemblyDescription("Windows launcher with the startup animation and wallpaper for Antigravity")]
+#elif APP_CODEX
 [assembly: AssemblyTitle("Codex Animated")]
 [assembly: AssemblyProduct("Codex Animated")]
-[assembly: AssemblyDescription("Windows launcher with the sunset startup animation and wallpaper for Codex")]
-[assembly: AssemblyVersion("1.2.1.0")]
-[assembly: AssemblyFileVersion("1.2.1.0")]
+[assembly: AssemblyDescription("Windows launcher with the startup animation and wallpaper for Codex")]
+#endif
+[assembly: AssemblyVersion("1.0.0.0")]
+[assembly: AssemblyFileVersion("1.0.0.0")]
 
 internal static class Launcher
 {
-    // The registered Microsoft Store identity stays the same across Codex updates.
-    private const string CodexAppId = "OpenAI.Codex_2p2nqsd0c76g0!App";
-
-    [ComImport, Guid("2E941141-7F97-4756-BA1D-9DECDE894A3D"),
-     InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    private interface IApplicationActivationManager
-    {
-        [PreserveSig]
-        int ActivateApplication([MarshalAs(UnmanagedType.LPWStr)] string appId,
-            [MarshalAs(UnmanagedType.LPWStr)] string arguments, uint options, out uint processId);
-    }
-
     [DllImport("user32.dll")]
     private static extern bool SetProcessDPIAware();
 
     [DllImport("user32.dll")]
     private static extern bool SetProcessDpiAwarenessContext(IntPtr context);
-
-    [DllImport("ole32.dll")]
-    private static extern int CoAllowSetForegroundWindow([MarshalAs(UnmanagedType.IUnknown)] object manager, IntPtr reserved);
 
     internal static int Run(string[] args)
     {
@@ -47,7 +43,7 @@ internal static class Launcher
         if (args.Length != 0 && !preview && !artwork) return 64;
         string instance = artwork ? "Artwork" : preview ? "Preview" : "Launch";
         bool first;
-        using (var mutex = new Mutex(true, @"Local\CodexAnimatedSplash." + instance, out first))
+        using (var mutex = new Mutex(true, @"Local\" + AppTarget.HelperName + "Splash." + instance, out first))
         {
             if (!first && !(artwork && ArtworkUpgrade.TakeOverPreviousHelper(mutex)))
                 return preview ? 5 : 0;
@@ -67,36 +63,28 @@ internal static class Launcher
                     ArtworkOverlay.Run();
                     return 0;
                 }
-                result = Play(out failure);
+                bool skipSplash = !preview && new WallpaperSettings().SkipWhenOpen &&
+                    AppTarget.FindMainWindow() != IntPtr.Zero;
+                result = skipSplash ? 0 : Play(out failure);
             }
             catch (Exception error) { failure = error.GetBaseException().Message; Console.Error.WriteLine(error); }
             if (artwork && failure != null)
-                MessageBox.Show("The Codex wallpaper helper could not start.\n\n" + failure,
-                    "Codex Animated", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show("The " + AppTarget.Name + " wallpaper helper could not start.\n\n" + failure,
+                    AppTarget.Product, MessageBoxButtons.OK, MessageBoxIcon.Warning);
             if (preview || artwork) return result;
             if (failure != null)
                 MessageBox.Show("The startup animation could not play.\n\n" + failure +
-                    "\n\nCheck that the Microsoft Edge WebView2 Runtime is installed and run the full Windows download again. Select OK to continue to Codex.",
-                    "Codex Animated", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    "\n\nCheck that the Microsoft Edge WebView2 Runtime is installed and run the full Windows download again. Select OK to continue to " + AppTarget.Name + ".",
+                    AppTarget.Product, MessageBoxButtons.OK, MessageBoxIcon.Warning);
 
-            // Activate after the splash closes. This lets Windows bring the existing
-            // session forward or create one normally, without changing its window.
             try
             {
-                Type managerType = Type.GetTypeFromCLSID(new Guid("45BA127D-10A8-46EA-8AB7-56EA9078943C"));
-                var manager = (IApplicationActivationManager)Activator.CreateInstance(managerType);
-                try
-                {
-                    uint processId;
-                    CoAllowSetForegroundWindow(manager, IntPtr.Zero);
-                    Marshal.ThrowExceptionForHR(manager.ActivateApplication(CodexAppId, null, 0, out processId));
-                }
-                finally { Marshal.ReleaseComObject(manager); }
+                AppTarget.Launch();
             }
             catch (Exception error)
             {
-                MessageBox.Show("Windows could not open Codex.\n\n" + error.Message,
-                    "Codex Animated", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show("Windows could not open " + AppTarget.Name + ".\n\n" + error.Message,
+                    AppTarget.Product, MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return 1;
             }
             try
@@ -109,7 +97,7 @@ internal static class Launcher
             catch (Exception error)
             {
                 MessageBox.Show("Windows could not start the wallpaper helper.\n\n" + error.Message,
-                    "Codex Animated", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    AppTarget.Product, MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return 1;
             }
             return 0;
@@ -150,11 +138,11 @@ internal sealed class LauncherTheme
         byte[] wallpaper = settings.LoadJpeg();
         return new Dictionary<string, byte[]>(StringComparer.Ordinal)
         {
-            { "index.html", Read("index.html") },
+            { "index.html", Encoding.UTF8.GetBytes(Encoding.UTF8.GetString(Read("index.html")).Replace("{{APP}}", AppTarget.Name.ToUpperInvariant())) },
             { "style.css", Read("style.css") },
             { "animation.js", Read("animation.js") },
             { "assets/artwork.jpg", wallpaper },
-            { "assets/avatar.jpg", wallpaper },
+            { "assets/avatar.jpg", settings.LoadAvatarJpegOr(wallpaper) },
             { "assets/contours.js", Read("assets/contours.js") }
         };
     }
@@ -190,7 +178,7 @@ internal sealed class Splash : Form
     internal Splash()
     {
         Result = 4;
-        Text = "Codex Animated";
+        Text = AppTarget.Product;
         AutoScaleMode = AutoScaleMode.None;
         BackColor = Color.FromArgb(8, 20, 29);
         FormBorderStyle = FormBorderStyle.None;
@@ -225,7 +213,7 @@ internal sealed class Splash : Form
         string stage = "loading animation assets";
         try
         {
-            string settingsDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Codex Animated");
+            string settingsDirectory = AppTarget.SettingsDirectory;
             var files = LauncherTheme.Current.ReadFiles(settingsDirectory);
             string profile = Path.Combine(settingsDirectory, "WebView2");
             var options = new CoreWebView2EnvironmentOptions();
